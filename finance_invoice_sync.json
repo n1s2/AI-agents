@@ -1,0 +1,10 @@
+{
+  "meta": {
+    "project": "Free AI Operations - Role Specific Workflows (COO/CFO/CTO/CMO)",
+    "author": "assistant",
+    "date": "2025-10-06"
+  },
+  "workflow": {
+    "name": "finance_invoice_sync"
+  }
+}
