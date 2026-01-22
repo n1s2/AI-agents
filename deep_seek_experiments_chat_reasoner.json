@@ -1,0 +1,125 @@
+{
+  "id": "IyhH1KHtXidKNSIA",
+  "meta": {
+    "instanceId": "31e69f7f4a77bf465b805824e303232f0227212ae922d12133a0f96ffeab4fef"
+  },
+  "name": "DeepSeek Experiments (Chat + Reasoner)",
+  "tags": [],
+  "nodes": [
+    {
+      "id": "54c59cae-fbd0-4f0d-b633-6304e6c66d89",
+      "name": "When chat message received",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "position": [-840, -740],
+      "webhookId": "b740bd14-1b9e-4b1b-abd2-1ecf1184d53a",
+      "parameters": { "options": {} },
+      "typeVersion": 1.1
+    },
+    {
+      "id": "ef85680e-569f-4e74-a1b4-aae9923a0dcb",
+      "name": "Main Chat Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "onError": "continueErrorOutput",
+      "position": [-320, 40],
+      "parameters": {
+        "agent": "conversationalAgent",
+        "options": {
+          "systemMessage": "You are an assistant running inside my n8n workflow. Keep responses clear, direct, and usable."
+        }
+      },
+      "retryOnFail": true,
+      "typeVersion": 1.7,
+      "alwaysOutputData": true
+    },
+    {
+      "id": "07a8c74c-768e-4b38-854f-251f2fe5b7bf",
+      "name": "DeepSeek R1 Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "position": [-360, 220],
+      "parameters": {
+        "model": "=deepseek-reasoner",
+        "options": {}
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "MSl7SdcvZe0SqCYI",
+          "name": "deepseek_api_main"
+        }
+      },
+      "typeVersion": 1.1
+    },
+    {
+      "id": "a6d58a8c-2d16-4c91-adde-acac98868150",
+      "name": "Short-Term Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "position": [-220, 220],
+      "parameters": {},
+      "typeVersion": 1.3
+    },
+    {
+      "id": "401a5932-9f3e-4b17-a531-3a19a6a7788a",
+      "name": "Prompt Formatter",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "position": [-320, -800],
+      "parameters": {
+        "messages": {
+          "messageValues": [
+            {
+              "message": "Assistant is used for internal workflow testing and response formatting."
+            }
+          ]
+        }
+      },
+      "typeVersion": 1.5
+    },
+    {
+      "id": "2ac8b41f-b27d-4074-abcc-430a8f5928e8",
+      "name": "Local DeepSeek (Ollama)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "position": [-320, -640],
+      "parameters": {
+        "model": "deepseek-r1:14b",
+        "options": {
+          "format": "default",
+          "numCtx": 16384,
+          "temperature": 0.6
+        }
+      },
+      "credentials": {
+        "ollamaApi": {
+          "id": "7aPaLgwpfdMWFYm9",
+          "name": "ollama_local_pc"
+        }
+      },
+      "typeVersion": 1
+    }
+  ],
+  "active": false,
+  "pinData": {
+    "When chat message received": [
+      {
+        "json": {
+          "action": "sendMessage",
+          "chatInput": "test prompt",
+          "sessionId": "local-test"
+        }
+      }
+    ]
+  },
+  "settings": { "executionOrder": "v1" },
+  "versionId": "e354040e-7898-4ff9-91a2-b6d36030dac8",
+  "connections": {
+    "DeepSeek R1 Model": {
+      "ai_languageModel": [[{ "node": "Main Chat Agent", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "Local DeepSeek (Ollama)": {
+      "ai_languageModel": [[{ "node": "Prompt Formatter", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "Short-Term Memory": {
+      "ai_memory": [[{ "node": "Main Chat Agent", "type": "ai_memory", "index": 0 }]]
+    },
+    "When chat message received": {
+      "main": [[{ "node": "Prompt Formatter", "type": "main", "index": 0 }]]
+    }
+  }
+}

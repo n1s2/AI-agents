@@ -1,0 +1,129 @@
+{
+  "id": "Telr6HU0ltH7s9f7",
+  "meta": {
+    "instanceId": "31e69f7f4a77bf465b805824e303232f0227212ae922d12133a0f96ffeab4fef"
+  },
+  "name": "Ollama Chat – JSON Response Flow",
+  "tags": [],
+  "nodes": [
+    {
+      "id": "9560e89b-ea08-49dc-924e-ec8b83477340",
+      "name": "When chat message received",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "position": [280, 60],
+      "webhookId": "4d06a912-2920-489c-a33c-0e3ea0b66745",
+      "parameters": { "options": {} },
+      "typeVersion": 1.1
+    },
+    {
+      "id": "c7919677-233f-4c48-ba01-ae923aef511e",
+      "name": "Main Processing Logic",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "onError": "continueErrorOutput",
+      "position": [640, 60],
+      "parameters": {
+        "text": "=Return a valid JSON object only. This format is required because the next node parses it.\n\nUser input:\n{{ $json.chatInput }}",
+        "promptType": "define"
+      },
+      "typeVersion": 1.5
+    },
+    {
+      "id": "b9676a8b-f790-4661-b8b9-3056c969bdf5",
+      "name": "Ollama Model (Local)",
+      "type": "@n8n/n8n-nodes-langchain.lmOllama",
+      "position": [740, 340],
+      "parameters": {
+        "model": "llama3.2:latest",
+        "options": {}
+      },
+      "credentials": {
+        "ollamaApi": {
+          "id": "IsSBWGtcJbjRiKqD",
+          "name": "ollama_local_pc"
+        }
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "b9b2ab8d-9bea-457a-b7bf-51c8ef0de69f",
+      "name": "Parse LLM Output",
+      "type": "n8n-nodes-base.set",
+      "position": [1220, 60],
+      "parameters": {
+        "options": {},
+        "assignments": {
+          "assignments": [
+            {
+              "id": "12af1a54-62a2-44c3-9001-95bb0d7c769d",
+              "name": "response",
+              "type": "object",
+              "value": "={{ $json.text }}"
+            }
+          ]
+        }
+      },
+      "typeVersion": 3.4
+    },
+    {
+      "id": "fdfd1a5c-e1a6-4390-9807-ce665b96b9ae",
+      "name": "Final Chat Output",
+      "type": "n8n-nodes-base.set",
+      "position": [1700, 60],
+      "parameters": {
+        "options": {},
+        "assignments": {
+          "assignments": [
+            {
+              "id": "13c4058d-2d50-46b7-a5a6-c788828a1764",
+              "name": "text",
+              "type": "string",
+              "value": "=Your prompt was: {{ $json.response.Prompt }}\n\nResponse: {{ $json.response.Response }}"
+            }
+          ]
+        }
+      },
+      "typeVersion": 3.4
+    },
+    {
+      "id": "76baa6fc-72dd-41f9-aef9-4fd718b526df",
+      "name": "Fallback Message",
+      "type": "n8n-nodes-base.set",
+      "position": [1460, 660],
+      "parameters": {
+        "options": {},
+        "assignments": {
+          "assignments": [
+            {
+              "id": "13c4058d-2d50-46b7-a5a6-c788828a1764",
+              "name": "text",
+              "type": "string",
+              "value": "=There was an error while processing the request."
+            }
+          ]
+        }
+      },
+      "typeVersion": 3.4
+    }
+  ],
+  "active": false,
+  "pinData": {},
+  "settings": { "executionOrder": "v1" },
+  "versionId": "5175454a-91b7-4c57-890d-629bd4e8d2fd",
+  "connections": {
+    "Ollama Model (Local)": {
+      "ai_languageModel": [[{ "node": "Main Processing Logic", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "Parse LLM Output": {
+      "main": [[{ "node": "Final Chat Output", "type": "main", "index": 0 }]]
+    },
+    "Main Processing Logic": {
+      "main": [
+        [{ "node": "Parse LLM Output", "type": "main", "index": 0 }],
+        [{ "node": "Fallback Message", "type": "main", "index": 0 }]
+      ]
+    },
+    "When chat message received": {
+      "main": [[{ "node": "Main Processing Logic", "type": "main", "index": 0 }]]
+    }
+  }
+}

@@ -1,0 +1,78 @@
+{
+  "id": "af8RV5b2TWB2LclA",
+  "meta": {
+    "instanceId": "95f2f2b8b3dabb8da5d47aa5145b95fe3845f47b20d6343dd5256b6a28ba8fab",
+    "templateCredsSetupCompleted": true
+  },
+  "name": "Local LLM Chat (Ollama)",
+  "tags": [],
+  "nodes": [
+    {
+      "id": "475385fa-28f3-45c4-bd1a-10dde79f74f2",
+      "name": "When chat message received",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "position": [700, 460],
+      "webhookId": "ebdeba3f-6b4f-49f3-ba0a-8253dd226161",
+      "parameters": {
+        "options": {}
+      },
+      "typeVersion": 1.1
+    },
+    {
+      "id": "eeffdd4e-6795-4ebc-84f7-87b5ac4167d9",
+      "name": "Main Chat Logic",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "position": [920, 460],
+      "parameters": {},
+      "typeVersion": 1.4
+    },
+    {
+      "id": "61133dc6-dcd9-44ff-85f2-5d8cc2ce813e",
+      "name": "Ollama Model (Local)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "position": [900, 680],
+      "parameters": {
+        "options": {
+          "temperature": 0.7
+        }
+      },
+      "credentials": {
+        "ollamaApi": {
+          "id": "MyYvr1tcNQ4e7M6l",
+          "name": "ollama_local_pc"
+        }
+      },
+      "typeVersion": 1
+    }
+  ],
+  "active": false,
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "3af03daa-e085-4774-8676-41578a4cba2d",
+  "connections": {
+    "Ollama Model (Local)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Main Chat Logic",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "Main Chat Logic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
