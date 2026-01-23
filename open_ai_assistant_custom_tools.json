@@ -1,0 +1,95 @@
+{
+  "id": "openaiAsstTools01",
+  "meta": {
+    "instanceId": "8c1f4a7d2b9e44c6a9e0cbb42f71a2d3e4f5a6b7c8d9e0011223344556677"
+  },
+  "name": "OpenAI Assistant – Custom Tools",
+  "tags": ["openai", "assistant", "tools"],
+  "nodes": [
+    {
+      "id": "chat-trigger-openai",
+      "name": "When chat message received",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "position": [420, 360],
+      "parameters": {
+        "options": {}
+      },
+      "typeVersion": 1.1
+    },
+    {
+      "id": "assistant-agent-main",
+      "name": "Assistant Core",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [660, 360],
+      "parameters": {
+        "agent": "openAiAssistant",
+        "options": {
+          "instructions": "You are an OpenAI Assistant running inside an n8n workflow. Use the available tools only when required. Keep answers accurate, concise, and actionable.",
+          "responseFormat": "auto"
+        }
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "openai-model-main",
+      "name": "OpenAI Assistant Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "position": [660, 600],
+      "parameters": {
+        "model": "gpt-4.1-mini",
+        "options": {
+          "temperature": 0.4
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "OpenAI_Main",
+          "name": "OpenAI Primary"
+        }
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "tool-weather",
+      "name": "Weather Tool",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "position": [920, 520],
+      "parameters": {
+        "name": "get_weather",
+        "description": "Fetch current weather data for a given location.",
+        "url": "={{ $json.weatherUrl }}"
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "tool-wiki",
+      "name": "Wiki Lookup Tool",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "position": [920, 680],
+      "parameters": {
+        "name": "wiki_lookup",
+        "description": "Fetch a short Wikipedia summary for a given topic.",
+        "url": "={{ $json.wikiUrl }}"
+      },
+      "typeVersion": 1
+    }
+  ],
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "connections": {
+    "When chat message received": {
+      "main": [[{ "node": "Assistant Core", "type": "main", "index": 0 }]]
+    },
+    "OpenAI Assistant Model": {
+      "ai_languageModel": [[{ "node": "Assistant Core", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "Weather Tool": {
+      "ai_tool": [[{ "node": "Assistant Core", "type": "ai_tool", "index": 0 }]]
+    },
+    "Wiki Lookup Tool": {
+      "ai_tool": [[{ "node": "Assistant Core", "type": "ai_tool", "index": 0 }]]
+    }
+  }
+}

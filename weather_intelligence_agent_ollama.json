@@ -1,0 +1,100 @@
+{
+  "id": "wthOllamaAgt01",
+  "meta": {
+    "instanceId": "f5d4b9a2a7c04a6fb31d8e2b0c0a19a7a0f3a1b4c9e2d8f1a6b7c3d9e4f2"
+  },
+  "name": "Weather Intelligence Agent (Ollama)",
+  "tags": ["weather", "ollama", "agent"],
+  "nodes": [
+    {
+      "id": "chat-trigger-1",
+      "name": "When chat message received",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "position": [520, 380],
+      "parameters": {
+        "options": {}
+      },
+      "typeVersion": 1.1
+    },
+    {
+      "id": "agent-main-1",
+      "name": "Weather Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [760, 380],
+      "parameters": {
+        "agent": "reActAgent",
+        "options": {
+          "prefix": "You are a weather information assistant running inside an n8n workflow. Use tools only when required to fetch real data.",
+          "suffix": "Question: {input}\nThought:{agent_scratchpad}",
+          "suffixChat": "Respond clearly and concisely using factual weather data.",
+          "humanMessageTemplate": "{input}\n\n{agent_scratchpad}"
+        }
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "ollama-model-1",
+      "name": "Ollama Model (Local)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "position": [760, 620],
+      "parameters": {
+        "options": {
+          "temperature": 0.3
+        }
+      },
+      "credentials": {
+        "ollamaApi": {
+          "id": "ollama_local_pc",
+          "name": "ollama_local_pc"
+        }
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "weather-api-1",
+      "name": "Fetch Weather Data",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1000, 620],
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "typeVersion": 4.1
+    },
+    {
+      "id": "wiki-api-1",
+      "name": "Fetch Wiki Summary",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1000, 820],
+      "parameters": {
+        "url": "={{ $json.wikiUrl }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "typeVersion": 4.1
+    }
+  ],
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "connections": {
+    "When chat message received": {
+      "main": [[{ "node": "Weather Agent", "type": "main", "index": 0 }]]
+    },
+    "Ollama Model (Local)": {
+      "ai_languageModel": [[{ "node": "Weather Agent", "type": "ai_languageModel", "index": 0 }]]
+    }
+  }
+}
