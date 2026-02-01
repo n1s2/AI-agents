@@ -1,0 +1,63 @@
+{
+  "id": "scInsightAgent01",
+  "meta": {
+    "instanceId": "c3f81e92aa144b5fa71d9b44c82f11c9"
+  },
+  "name": "Search Console Insight Assistant",
+  "nodes": [
+    {
+      "id": "chat-webhook",
+      "name": "Chat Intake",
+      "type": "n8n-nodes-base.webhook",
+      "position": [500, 0],
+      "parameters": {
+        "path": "search-console/chat",
+        "httpMethod": "POST",
+        "responseMode": "responseNode"
+      }
+    },
+    {
+      "id": "input-normalizer",
+      "name": "Normalize Input",
+      "type": "n8n-nodes-base.set",
+      "position": [900, 0],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {"name": "chatInput", "value": "={{$json.body.chatInput}}"},
+            {"name": "sessionId", "value": "={{$json.body.sessionId}}"}
+          ]
+        }
+      }
+    },
+    {
+      "id": "agent-core",
+      "name": "Insight Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [1300, 0],
+      "parameters": {
+        "options": {
+          "systemMessage": "Assist users in querying Search Console data conversationally and return insights in a structured, readable format.",
+          "returnIntermediateSteps": true
+        }
+      }
+    },
+    {
+      "id": "response",
+      "name": "Send Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [1700, 0]
+    }
+  ],
+  "connections": {
+    "Chat Intake": {
+      "main": [[{"node": "Normalize Input", "type": "main", "index": 0}]]
+    },
+    "Normalize Input": {
+      "main": [[{"node": "Insight Agent", "type": "main", "index": 0}]]
+    },
+    "Insight Agent": {
+      "main": [[{"node": "Send Response", "type": "main", "index": 0}]]
+    }
+  }
+}

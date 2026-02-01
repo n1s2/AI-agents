@@ -1,0 +1,49 @@
+{
+  "id": "promptSync01",
+  "meta": {
+    "instanceId": "e71a4c6b2d9f4b889b41cfa1c992aa11"
+  },
+  "name": "Remote Prompt Sync Engine",
+  "nodes": [
+    {
+      "id": "schedule",
+      "name": "Prompt Refresh Trigger",
+      "type": "n8n-nodes-base.cron",
+      "position": [600, 300],
+      "parameters": {
+        "triggerTimes": [{"mode": "everyHour"}]
+      }
+    },
+    {
+      "id": "fetch-prompts",
+      "name": "Fetch Prompt Definitions",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1000, 300],
+      "parameters": {
+        "url": "https://raw.githubusercontent.com/org/prompts/main/prompts.json",
+        "method": "GET"
+      }
+    },
+    {
+      "id": "apply-prompts",
+      "name": "Apply Prompts",
+      "type": "n8n-nodes-base.set",
+      "position": [1400, 300],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {"name": "systemPrompt", "value": "={{$json.system}}"}
+          ]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Prompt Refresh Trigger": {
+      "main": [[{"node": "Fetch Prompt Definitions", "type": "main", "index": 0}]]
+    },
+    "Fetch Prompt Definitions": {
+      "main": [[{"node": "Apply Prompts", "type": "main", "index": 0}]]
+    }
+  }
+}

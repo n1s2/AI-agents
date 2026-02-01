@@ -1,0 +1,58 @@
+{
+  "id": "adaptiveUiGen01",
+  "meta": {
+    "instanceId": "a91d3b6c2e8f4c7aa4e0b912fbc991aa"
+  },
+  "name": "Adaptive UI Generator",
+  "nodes": [
+    {
+      "id": "webhook-in",
+      "name": "UI Request Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [800, 380],
+      "parameters": {
+        "path": "ui-request",
+        "responseMode": "responseNode"
+      }
+    },
+    {
+      "id": "ui-llm",
+      "name": "UI Schema Builder",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1200, 380],
+      "parameters": {
+        "url": "https://api.openai.com/v1/chat/completions",
+        "method": "POST",
+        "jsonBody": "={\n \"model\": \"gpt-4o-mini\",\n \"messages\": [\n {\"role\": \"system\", \"content\": \"You design clean, production-ready HTML using Tailwind CSS. Return structured UI data only.\"},\n {\"role\": \"user\", \"content\": \"{{$json.query.query}}\"}\n ]\n}",
+        "sendBody": true,
+        "authentication": "predefinedCredentialType"
+      }
+    },
+    {
+      "id": "html-format",
+      "name": "HTML Renderer",
+      "type": "n8n-nodes-base.html",
+      "position": [1600, 380],
+      "parameters": {
+        "html": "<!DOCTYPE html><html><head><script src=\"https://cdn.tailwindcss.com\"></script></head><body>{{$json.html}}</body></html>"
+      }
+    },
+    {
+      "id": "webhook-out",
+      "name": "Return HTML",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [2000, 380]
+    }
+  ],
+  "connections": {
+    "UI Request Webhook": {
+      "main": [[{"node": "UI Schema Builder", "type": "main", "index": 0}]]
+    },
+    "UI Schema Builder": {
+      "main": [[{"node": "HTML Renderer", "type": "main", "index": 0}]]
+    },
+    "HTML Renderer": {
+      "main": [[{"node": "Return HTML", "type": "main", "index": 0}]]
+    }
+  }
+}
