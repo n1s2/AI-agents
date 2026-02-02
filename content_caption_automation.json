@@ -1,0 +1,81 @@
+{
+  "id": "contentCaptionAuto01",
+  "meta": {
+    "instanceId": "b2e4c9a71f8a4d1fa19c0d72a33eaa91"
+  },
+  "name": "Content Caption Automation",
+  "nodes": [
+    {
+      "id": "airtable-trigger",
+      "name": "Editorial Intake Trigger",
+      "type": "n8n-nodes-base.airtableTrigger",
+      "position": [-400, -120],
+      "parameters": {
+        "baseId": "appXvZviYORVbPEaS",
+        "tableId": "tblxsKj5PtumCR9um",
+        "triggerField": "created_at",
+        "pollTimes": { "item": [{ "mode": "everyMinute" }] }
+      }
+    },
+    {
+      "id": "delay",
+      "name": "Record Stabilizer",
+      "type": "n8n-nodes-base.wait",
+      "position": [-200, -120],
+      "parameters": { "unit": "minutes", "amount": 1 }
+    },
+    {
+      "id": "fetch-record",
+      "name": "Load Editorial Data",
+      "type": "n8n-nodes-base.airtable",
+      "position": [0, -120],
+      "parameters": {
+        "operation": "get",
+        "id": "={{ $json.id }}",
+        "base": "appXvZviYORVbPEaS",
+        "table": "tbllbO3DyTNie9Pga"
+      }
+    },
+    {
+      "id": "caption-agent",
+      "name": "Caption Generator",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [260, -120],
+      "parameters": {
+        "text": "={{ $json.Briefing }}",
+        "options": {
+          "systemMessage": "Create concise, engaging social media captions aligned with the provided briefing and brand tone. Return only the caption text.",
+          "returnIntermediateSteps": false
+        }
+      }
+    },
+    {
+      "id": "normalize-output",
+      "name": "Normalize Caption",
+      "type": "n8n-nodes-base.set",
+      "position": [520, -120],
+      "parameters": {
+        "assignments": { "assignments": [{ "name": "SoMe_Text_KI", "value": "={{ $json.output }}" }] }
+      }
+    },
+    {
+      "id": "update-record",
+      "name": "Update Editorial Entry",
+      "type": "n8n-nodes-base.airtable",
+      "position": [780, -120],
+      "parameters": {
+        "operation": "update",
+        "base": "appXvZviYORVbPEaS",
+        "table": "tblxsKj5PtumCR9um",
+        "columns": { "id": "={{ $json.id }}", "SoMe_Text_KI": "={{ $json.SoMe_Text_KI }}" }
+      }
+    }
+  ],
+  "connections": {
+    "Editorial Intake Trigger": { "main": [[{ "node": "Record Stabilizer", "type": "main", "index": 0 }]] },
+    "Record Stabilizer": { "main": [[{ "node": "Load Editorial Data", "type": "main", "index": 0 }]] },
+    "Load Editorial Data": { "main": [[{ "node": "Caption Generator", "type": "main", "index": 0 }]] },
+    "Caption Generator": { "main": [[{ "node": "Normalize Caption", "type": "main", "index": 0 }]] },
+    "Normalize Caption": { "main": [[{ "node": "Update Editorial Entry", "type": "main", "index": 0 }]] }
+  }
+}

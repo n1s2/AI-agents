@@ -1,0 +1,45 @@
+{
+  "id": "videoTrendIntel01",
+  "meta": {
+    "instanceId": "d7a2f5c44c1a4f98b73a6f0c1f92b441"
+  },
+  "name": "Video Trend Intelligence Engine",
+  "nodes": [
+    {
+      "id": "manual-start",
+      "name": "Analysis Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "position": [-200, 120]
+    },
+    {
+      "id": "trend-agent",
+      "name": "Trend Analysis Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [80, 120],
+      "parameters": {
+        "text": "={{ $json.niche }}",
+        "options": {
+          "systemMessage": "Analyze current video platform trends for the given niche and return actionable content ideas with brief rationale.",
+          "returnIntermediateSteps": false
+        }
+      }
+    },
+    {
+      "id": "format-results",
+      "name": "Format Trend Output",
+      "type": "n8n-nodes-base.set",
+      "position": [360, 120],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "name": "trend_summary", "value": "={{ $json.output }}" }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Analysis Trigger": { "main": [[{ "node": "Trend Analysis Agent", "type": "main", "index": 0 }]] },
+    "Trend Analysis Agent": { "main": [[{ "node": "Format Trend Output", "type": "main", "index": 0 }]] }
+  }
+}
