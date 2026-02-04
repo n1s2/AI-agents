@@ -1,0 +1,114 @@
+{
+  "id": "cropAnomalyDetector01",
+  "meta": {
+    "instanceId": "8e3b4c9a2d1f47a1b0c7e6d5f3a9b821"
+  },
+  "name": "Image-Based Crop Anomaly Detector",
+  "tags": ["vision", "anomaly-detection", "agriculture"],
+  "nodes": [
+    {
+      "id": "workflow-trigger",
+      "name": "Image Analysis Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "position": [-720, 60]
+    },
+    {
+      "id": "input-image",
+      "name": "Extract Image URL",
+      "type": "n8n-nodes-base.set",
+      "position": [-480, 60],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "name": "imageURL", "value": "={{ $json.query.imageURL }}" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "cluster-vars",
+      "name": "Cluster Runtime Config",
+      "type": "n8n-nodes-base.set",
+      "position": [-200, 60],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "name": "clusterCenterType", "value": "is_medoid" },
+            { "name": "clusterThresholdKey", "value": "is_medoid_cluster_threshold" },
+            { "name": "collectionName", "value": "agricultural-crops" },
+            { "name": "qdrantUrl", "value": "https://qdrant-cloud-instance" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "collection-count",
+      "name": "Count Collection Items",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [40, 60],
+      "parameters": {
+        "url": "={{ $json.qdrantUrl }}/collections/{{ $json.collectionName }}/points/count",
+        "method": "POST",
+        "jsonBody": "={ \"exact\": true }",
+        "sendBody": true
+      }
+    },
+    {
+      "id": "facet-count",
+      "name": "Count Crop Classes",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [240, 60],
+      "parameters": {
+        "url": "={{ $json.qdrantUrl }}/collections/{{ $json.collectionName }}/facet",
+        "method": "POST",
+        "jsonBody": "={ \"key\": \"crop_name\", \"exact\": true }",
+        "sendBody": true
+      }
+    },
+    {
+      "id": "embed-image",
+      "name": "Generate Image Embedding",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [680, 60],
+      "parameters": {
+        "url": "https://api.voyageai.com/v1/multimodalembeddings",
+        "method": "POST",
+        "jsonBody": "={{ { \"inputs\": [{ \"content\": [{ \"type\": \"image_url\", \"image_url\": $json.imageURL }] }], \"model\": \"voyage-multimodal-3\", \"input_type\": \"document\" } }}",
+        "sendBody": true
+      }
+    },
+    {
+      "id": "similarity-search",
+      "name": "Compare Against Cluster Medoids",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [940, 60],
+      "parameters": {
+        "url": "={{ $json.qdrantUrl }}/collections/{{ $json.collectionName }}/points/query",
+        "method": "POST",
+        "jsonBody": "={{ { \"query\": $json.data[0].embedding, \"limit\": 10, \"with_payload\": true, \"filter\": { \"must\": [{ \"key\": $json.clusterCenterType, \"match\": { \"value\": true } }] } } }}",
+        "sendBody": true
+      }
+    },
+    {
+      "id": "score-eval",
+      "name": "Evaluate Similarity Scores",
+      "type": "n8n-nodes-base.code",
+      "position": [1140, 60],
+      "parameters": {
+        "language": "python",
+        "pythonCode": "points = _input.first()['json']['result']['points']\nth_key = _input.first()['json'].get('clusterThresholdKey')\nmax_score = -1\nbest = None\nundefined = True\nfor p in points:\n    if p['score'] >= p['payload'].get(th_key, 1):\n        undefined = False\n        if p['score'] > max_score:\n            max_score = p['score']\n            best = p['payload'].get('crop_name')\nif undefined:\n    msg = 'Potentially unknown crop detected'\nelse:\n    msg = f'Closest match: {best}'\nreturn [{ 'json': { 'result': msg } }]"
+      }
+    }
+  ],
+  "connections": {
+    "Image Analysis Trigger": { "main": [[{ "node": "Extract Image URL", "type": "main", "index": 0 }]] },
+    "Extract Image URL": { "main": [[{ "node": "Cluster Runtime Config", "type": "main", "index": 0 }]] },
+    "Cluster Runtime Config": { "main": [[{ "node": "Count Collection Items", "type": "main", "index": 0 }]] },
+    "Count Collection Items": { "main": [[{ "node": "Count Crop Classes", "type": "main", "index": 0 }]] },
+    "Count Crop Classes": { "main": [[{ "node": "Generate Image Embedding", "type": "main", "index": 0 }]] },
+    "Generate Image Embedding": { "main": [[{ "node": "Compare Against Cluster Medoids", "type": "main", "index": 0 }]] },
+    "Compare Against Cluster Medoids": { "main": [[{ "node": "Evaluate Similarity Scores", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" }
+}
