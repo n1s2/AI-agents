@@ -1,0 +1,181 @@
+{
+  "name": "FLOOWBOX - LinkedIn Post Generator from Blog or URL",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## LinkedIn Post Generator\nPaste any blog URL or article → get 3 LinkedIn post variations ready to publish.\n\nBuilt this because writing LinkedIn posts manually for every piece of content was taking 30+ mins each time.\n\n**Setup:** OpenAI API key only. No other credentials needed.",
+        "height": 200,
+        "width": 360,
+        "color": 5
+      },
+      "id": "0e1f2a3b-0001-0001-0001-000000000001",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [180, 120]
+    },
+    {
+      "parameters": {},
+      "id": "0e1f2a3b-0001-0001-0001-000000000002",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [220, 380]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "inp-001",
+              "name": "article_url",
+              "value": "https://example.com/your-article-url-here",
+              "type": "string"
+            },
+            {
+              "id": "inp-002",
+              "name": "tone",
+              "value": "professional but conversational",
+              "type": "string"
+            },
+            {
+              "id": "inp-003",
+              "name": "target_audience",
+              "value": "startup founders and small business owners",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "0e1f2a3b-0001-0001-0001-000000000003",
+      "name": "Set Input Params",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [440, 380]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.article_url }}",
+        "options": {}
+      },
+      "id": "0e1f2a3b-0001-0001-0001-000000000004",
+      "name": "Fetch Article Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 380]
+    },
+    {
+      "parameters": {
+        "operation": "extractHtmlContent",
+        "dataPropertyName": "data",
+        "extractionValues": {
+          "values": [
+            {
+              "key": "article_text",
+              "cssSelector": "p",
+              "returnArray": false
+            },
+            {
+              "key": "page_title",
+              "cssSelector": "title",
+              "returnArray": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "0e1f2a3b-0001-0001-0001-000000000005",
+      "name": "Extract Text",
+      "type": "n8n-nodes-base.html",
+      "typeVersion": 1.2,
+      "position": [880, 380]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a LinkedIn content expert. Based on this article, write 3 different LinkedIn post variations.\n\nArticle Title: {{ $json.page_title }}\nArticle Content: {{ $json.article_text.substring(0, 2000) }}\n\nTarget Audience: {{ $('Set Input Params').item.json.target_audience }}\nTone: {{ $('Set Input Params').item.json.tone }}\n\nWrite 3 posts:\n\nPOST 1 (Hook with a bold statement - 150 words max):\n[write here]\n\nPOST 2 (Storytelling format - 200 words max):\n[write here]\n\nPOST 3 (Tips/list format - 5 bullet points):\n[write here]\n\nEach post must end with 3-5 relevant hashtags.",
+        "options": {
+          "systemMessage": "You write engaging LinkedIn posts that get high engagement. You never use cliches like 'game-changer' or 'excited to share'. Posts feel human and direct."
+        }
+      },
+      "id": "0e1f2a3b-0001-0001-0001-000000000006",
+      "name": "Generate 3 Post Variations",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.5,
+      "position": [1100, 380]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "options": {}
+      },
+      "id": "0e1f2a3b-0001-0001-0001-000000000007",
+      "name": "OpenAI GPT-4o",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [1100, 560]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "out-001",
+              "name": "linkedin_posts",
+              "value": "={{ $json.text }}",
+              "type": "string"
+            },
+            {
+              "id": "out-002",
+              "name": "source_url",
+              "value": "={{ $('Set Input Params').item.json.article_url }}",
+              "type": "string"
+            },
+            {
+              "id": "out-003",
+              "name": "generated_at",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "0e1f2a3b-0001-0001-0001-000000000008",
+      "name": "Format Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1320, 380]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [[{"node": "Set Input Params", "type": "main", "index": 0}]]
+    },
+    "Set Input Params": {
+      "main": [[{"node": "Fetch Article Content", "type": "main", "index": 0}]]
+    },
+    "Fetch Article Content": {
+      "main": [[{"node": "Extract Text", "type": "main", "index": 0}]]
+    },
+    "Extract Text": {
+      "main": [[{"node": "Generate 3 Post Variations", "type": "main", "index": 0}]]
+    },
+    "Generate 3 Post Variations": {
+      "main": [[{"node": "Format Output", "type": "main", "index": 0}]]
+    },
+    "OpenAI GPT-4o": {
+      "ai_languageModel": [[{"node": "Generate 3 Post Variations", "type": "ai_languageModel", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "instanceId": "navtej-floowbox-n8n-2025"
+  },
+  "tags": []
+}

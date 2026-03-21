@@ -1,0 +1,190 @@
+{
+  "name": "FLOOWBOX - AI Email Reply Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## AI Email Reply Agent\nReads incoming emails, understands context, and drafts a reply automatically.\n\nSaves to Google Sheets for review before sending — never sends without approval.\n\n**Setup:**\n- Gmail credentials (OAuth)\n- OpenAI API key\n- Google Sheets for draft storage",
+        "height": 240,
+        "width": 380,
+        "color": 3
+      },
+      "id": "3c4d5e6f-0004-0004-0004-000000000001",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [180, 100]
+    },
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [{"mode": "everyMinute", "value": 15}]
+        },
+        "filters": {
+          "readStatus": "unread",
+          "sender": ""
+        },
+        "options": {}
+      },
+      "id": "3c4d5e6f-0004-0004-0004-000000000002",
+      "name": "Gmail Trigger",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.2,
+      "position": [220, 380]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e-001",
+              "name": "sender_email",
+              "value": "={{ $json.from }}",
+              "type": "string"
+            },
+            {
+              "id": "e-002",
+              "name": "sender_name",
+              "value": "={{ $json.from.split('<')[0].trim() }}",
+              "type": "string"
+            },
+            {
+              "id": "e-003",
+              "name": "subject",
+              "value": "={{ $json.subject }}",
+              "type": "string"
+            },
+            {
+              "id": "e-004",
+              "name": "email_body",
+              "value": "={{ $json.text }}",
+              "type": "string"
+            },
+            {
+              "id": "e-005",
+              "name": "received_at",
+              "value": "={{ $json.date }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3c4d5e6f-0004-0004-0004-000000000003",
+      "name": "Extract Email Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [440, 380]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are Navtej's email assistant at FLOOWBOX.\n\nIncoming email:\nFrom: {{ $json.sender_name }} ({{ $json.sender_email }})\nSubject: {{ $json.subject }}\nMessage: {{ $json.email_body }}\n\nClassify this email as one of:\n- client_inquiry (asking about services)\n- existing_client (update or question from current client)\n- partnership (collaboration request)\n- spam (promotional or irrelevant)\n- other\n\nThen write a professional reply draft.\n\nRespond in this format:\nCATEGORY: [category]\nPRIORITY: [high/medium/low]\nREPLY_DRAFT:\n[Your reply here, signed as Navtej from FLOOWBOX]",
+        "options": {
+          "systemMessage": "You write emails exactly as Navtej would — direct, warm, professional. Never use corporate jargon. Keep replies under 150 words unless the email requires a detailed response."
+        }
+      },
+      "id": "3c4d5e6f-0004-0004-0004-000000000004",
+      "name": "Classify and Draft Reply",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.5,
+      "position": [660, 380]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "options": {}
+      },
+      "id": "3c4d5e6f-0004-0004-0004-000000000005",
+      "name": "OpenAI GPT-4o",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [660, 560]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "filter-001",
+              "leftValue": "={{ $json.text }}",
+              "rightValue": "spam",
+              "operator": {
+                "type": "string",
+                "operation": "notContains"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3c4d5e6f-0004-0004-0004-000000000006",
+      "name": "Skip Spam",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [880, 380]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Email Drafts"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Date": "={{ $now.toFormat('yyyy-MM-dd HH:mm') }}",
+            "From": "={{ $('Extract Email Data').item.json.sender_email }}",
+            "Subject": "={{ $('Extract Email Data').item.json.subject }}",
+            "AI Analysis": "={{ $json.text }}",
+            "Status": "Needs Review"
+          }
+        },
+        "options": {}
+      },
+      "id": "3c4d5e6f-0004-0004-0004-000000000007",
+      "name": "Save Draft to Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [1100, 380]
+    }
+  ],
+  "connections": {
+    "Gmail Trigger": {
+      "main": [[{"node": "Extract Email Data", "type": "main", "index": 0}]]
+    },
+    "Extract Email Data": {
+      "main": [[{"node": "Classify and Draft Reply", "type": "main", "index": 0}]]
+    },
+    "Classify and Draft Reply": {
+      "main": [[{"node": "Skip Spam", "type": "main", "index": 0}]]
+    },
+    "OpenAI GPT-4o": {
+      "ai_languageModel": [[{"node": "Classify and Draft Reply", "type": "ai_languageModel", "index": 0}]]
+    },
+    "Skip Spam": {
+      "main": [[{"node": "Save Draft to Sheets", "type": "main", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "instanceId": "navtej-floowbox-n8n-2025"
+  },
+  "tags": []
+}
