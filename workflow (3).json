@@ -1,0 +1,152 @@
+{
+  "name": "FLOOWBOX - WhatsApp Lead Capture and CRM Sync",
+  "meta": {
+    "instanceId": "navtej-floowbox-n8n-2025"
+  },
+  "nodes": [
+    {
+      "id": "node-001",
+      "name": "WhatsApp Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [240, 300],
+      "parameters": {
+        "path": "whatsapp-lead",
+        "httpMethod": "POST",
+        "responseMode": "responseNode"
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "node-002",
+      "name": "Extract Lead Data",
+      "type": "n8n-nodes-base.set",
+      "position": [460, 300],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {"id": "a1", "name": "phone", "type": "string", "value": "={{ $json.entry[0].changes[0].value.messages[0].from }}"},
+            {"id": "a2", "name": "message", "type": "string", "value": "={{ $json.entry[0].changes[0].value.messages[0].text.body }}"},
+            {"id": "a3", "name": "timestamp", "type": "string", "value": "={{ $json.entry[0].changes[0].value.messages[0].timestamp }}"},
+            {"id": "a4", "name": "name", "type": "string", "value": "={{ $json.entry[0].changes[0].value.contacts[0].profile.name }}"}
+          ]
+        }
+      },
+      "typeVersion": 3.4
+    },
+    {
+      "id": "node-003",
+      "name": "Qualify Lead with AI",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "position": [680, 300],
+      "parameters": {
+        "promptType": "define",
+        "text": "=Analyze this WhatsApp message from a potential lead and extract:\n1. Intent (buying/inquiry/support/spam)\n2. Product interest (if mentioned)\n3. Urgency level (high/medium/low)\n4. Recommended action\n\nMessage: {{ $json.message }}\nName: {{ $json.name }}\n\nRespond in JSON format only."
+      },
+      "typeVersion": 1.5
+    },
+    {
+      "id": "node-004",
+      "name": "OpenAI GPT-4o",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "position": [680, 460],
+      "parameters": {
+        "model": "gpt-4o",
+        "options": {}
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "node-005",
+      "name": "Route by Intent",
+      "type": "n8n-nodes-base.switch",
+      "position": [900, 300],
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ JSON.parse($json.text).intent }}",
+        "rules": {
+          "rules": [
+            {"value2": "buying", "output": 0},
+            {"value2": "inquiry", "output": 1},
+            {"value2": "spam", "output": 2}
+          ]
+        }
+      },
+      "typeVersion": 3
+    },
+    {
+      "id": "node-006",
+      "name": "Add to CRM as Hot Lead",
+      "type": "n8n-nodes-base.airtable",
+      "position": [1120, 200],
+      "parameters": {
+        "operation": "create",
+        "baseId": "YOUR_AIRTABLE_BASE_ID",
+        "tableId": "Leads",
+        "fieldsUi": {
+          "fieldValues": [
+            {"fieldId": "Name", "fieldValue": "={{ $('Extract Lead Data').item.json.name }}"},
+            {"fieldId": "Phone", "fieldValue": "={{ $('Extract Lead Data').item.json.phone }}"},
+            {"fieldId": "Status", "fieldValue": "Hot Lead"},
+            {"fieldId": "Source", "fieldValue": "WhatsApp"},
+            {"fieldId": "Message", "fieldValue": "={{ $('Extract Lead Data').item.json.message }}"}
+          ]
+        }
+      },
+      "typeVersion": 2.1
+    },
+    {
+      "id": "node-007",
+      "name": "Send Auto Reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1120, 340],
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v18.0/YOUR_PHONE_ID/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "jsonBody": "={\n  \"messaging_product\": \"whatsapp\",\n  \"to\": \"{{ $('Extract Lead Data').item.json.phone }}\",\n  \"type\": \"text\",\n  \"text\": {\n    \"body\": \"Hi {{ $('Extract Lead Data').item.json.name }}! Thanks for reaching out. Our team will connect with you shortly.\"\n  }\n}",
+        "sendBody": true,
+        "specifyBody": "json"
+      },
+      "typeVersion": 4.2
+    },
+    {
+      "id": "node-008",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [1340, 300],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"status\": \"received\"}"
+      },
+      "typeVersion": 1.1
+    },
+    {
+      "id": "node-sticky-1",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [220, 160],
+      "parameters": {
+        "content": "## FLOOWBOX - WhatsApp Lead Capture\nBuilt this for clients who get leads via WhatsApp but were manually copying them to their CRM.\n\nNow every message is automatically:\n- Qualified by AI\n- Added to Airtable CRM\n- Replied to instantly\n\nSetup: Add your WhatsApp Business API credentials and Airtable base ID."
+      },
+      "typeVersion": 1
+    }
+  ],
+  "connections": {
+    "WhatsApp Webhook": {"main": [[{"node": "Extract Lead Data", "type": "main", "index": 0}]]},
+    "Extract Lead Data": {"main": [[{"node": "Qualify Lead with AI", "type": "main", "index": 0}]]},
+    "Qualify Lead with AI": {"main": [[{"node": "Route by Intent", "type": "main", "index": 0}]]},
+    "OpenAI GPT-4o": {"ai_languageModel": [[{"node": "Qualify Lead with AI", "type": "ai_languageModel", "index": 0}]]},
+    "Route by Intent": {
+      "main": [
+        [{"node": "Add to CRM as Hot Lead", "type": "main", "index": 0}],
+        [{"node": "Send Auto Reply", "type": "main", "index": 0}],
+        [{"node": "Webhook Response", "type": "main", "index": 0}]
+      ]
+    },
+    "Add to CRM as Hot Lead": {"main": [[{"node": "Send Auto Reply", "type": "main", "index": 0}]]},
+    "Send Auto Reply": {"main": [[{"node": "Webhook Response", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"}
+}
