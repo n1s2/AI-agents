@@ -1,0 +1,262 @@
+{
+  "name": "FLOOWBOX - Reddit Lead Finder for B2B Services",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Reddit Lead Finder\nSearches Reddit for posts where people are asking for exactly what you offer — automation, AI agents, workflow help.\n\nAI scores each post by lead quality and generates a personalized reply draft.\n\n**Setup:**\n- Reddit API credentials (free)\n- OpenAI API key",
+        "height": 220,
+        "width": 380,
+        "color": 6
+      },
+      "id": "2b3c4d5e-0003-0003-0003-000000000001",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [180, 120]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{"field": "hours", "hoursInterval": 6}]
+        }
+      },
+      "id": "2b3c4d5e-0003-0003-0003-000000000002",
+      "name": "Every 6 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [220, 400]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "r-001",
+              "name": "search_query",
+              "value": "need help automating OR looking for automation OR automate my workflow",
+              "type": "string"
+            },
+            {
+              "id": "r-002",
+              "name": "subreddits",
+              "value": "entrepreneur,smallbusiness,startups,SaaS,nocode",
+              "type": "string"
+            },
+            {
+              "id": "r-003",
+              "name": "my_service",
+              "value": "I build AI agents and workflow automation using n8n for businesses",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "2b3c4d5e-0003-0003-0003-000000000003",
+      "name": "Set Search Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [440, 400]
+    },
+    {
+      "parameters": {
+        "url": "=https://www.reddit.com/search.json?q={{ encodeURIComponent($json.search_query) }}&sort=new&limit=25&t=day",
+        "options": {
+          "headers": {
+            "parameters": [
+              {"name": "User-Agent", "value": "n8n-floowbox-leadfinder/1.0"}
+            ]
+          }
+        }
+      },
+      "id": "2b3c4d5e-0003-0003-0003-000000000004",
+      "name": "Search Reddit Posts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 400]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "data.children",
+        "options": {}
+      },
+      "id": "2b3c4d5e-0003-0003-0003-000000000005",
+      "name": "Split Posts",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [880, 400]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "p-001",
+              "name": "post_title",
+              "value": "={{ $json.data.title }}",
+              "type": "string"
+            },
+            {
+              "id": "p-002",
+              "name": "post_text",
+              "value": "={{ $json.data.selftext }}",
+              "type": "string"
+            },
+            {
+              "id": "p-003",
+              "name": "post_url",
+              "value": "=https://reddit.com{{ $json.data.permalink }}",
+              "type": "string"
+            },
+            {
+              "id": "p-004",
+              "name": "subreddit",
+              "value": "={{ $json.data.subreddit }}",
+              "type": "string"
+            },
+            {
+              "id": "p-005",
+              "name": "author",
+              "value": "={{ $json.data.author }}",
+              "type": "string"
+            },
+            {
+              "id": "p-006",
+              "name": "upvotes",
+              "value": "={{ $json.data.ups }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "2b3c4d5e-0003-0003-0003-000000000006",
+      "name": "Extract Post Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1100, 400]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a B2B lead qualification expert.\n\nMy service: {{ $('Set Search Config').item.json.my_service }}\n\nReddit post:\nTitle: {{ $json.post_title }}\nContent: {{ $json.post_text }}\nSubreddit: r/{{ $json.subreddit }}\n\nRespond in this exact format:\nSCORE: [1-10, where 10 = perfect lead]\nREASON: [one sentence why]\nREPLY_DRAFT: [a helpful, non-salesy 3-sentence reply I could post]\n\nScore 8+ only if they clearly need automation services. Be strict.",
+        "options": {
+          "systemMessage": "You qualify leads accurately. You never overscore. A 10 means they explicitly need what is being offered and are ready to pay."
+        }
+      },
+      "id": "2b3c4d5e-0003-0003-0003-000000000007",
+      "name": "Score and Draft Reply",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.5,
+      "position": [1320, 400]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "options": {}
+      },
+      "id": "2b3c4d5e-0003-0003-0003-000000000008",
+      "name": "OpenAI GPT-4o-mini",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [1320, 580]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-001",
+              "leftValue": "={{ $json.text.match(/SCORE: (\\d+)/)?.[1] }}",
+              "rightValue": "7",
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "2b3c4d5e-0003-0003-0003-000000000009",
+      "name": "Only High Scores",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [1540, 400]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Reddit Leads"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Date": "={{ $now.toFormat('yyyy-MM-dd') }}",
+            "Title": "={{ $('Extract Post Data').item.json.post_title }}",
+            "Subreddit": "={{ $('Extract Post Data').item.json.subreddit }}",
+            "URL": "={{ $('Extract Post Data').item.json.post_url }}",
+            "Author": "={{ $('Extract Post Data').item.json.author }}",
+            "AI Analysis": "={{ $json.text }}",
+            "Status": "New"
+          }
+        },
+        "options": {}
+      },
+      "id": "2b3c4d5e-0003-0003-0003-000000000010",
+      "name": "Save to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [1760, 400]
+    }
+  ],
+  "connections": {
+    "Every 6 Hours": {
+      "main": [[{"node": "Set Search Config", "type": "main", "index": 0}]]
+    },
+    "Set Search Config": {
+      "main": [[{"node": "Search Reddit Posts", "type": "main", "index": 0}]]
+    },
+    "Search Reddit Posts": {
+      "main": [[{"node": "Split Posts", "type": "main", "index": 0}]]
+    },
+    "Split Posts": {
+      "main": [[{"node": "Extract Post Data", "type": "main", "index": 0}]]
+    },
+    "Extract Post Data": {
+      "main": [[{"node": "Score and Draft Reply", "type": "main", "index": 0}]]
+    },
+    "Score and Draft Reply": {
+      "main": [[{"node": "Only High Scores", "type": "main", "index": 0}]]
+    },
+    "OpenAI GPT-4o-mini": {
+      "ai_languageModel": [[{"node": "Score and Draft Reply", "type": "ai_languageModel", "index": 0}]]
+    },
+    "Only High Scores": {
+      "main": [[{"node": "Save to Google Sheets", "type": "main", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "instanceId": "navtej-floowbox-n8n-2025"
+  },
+  "tags": []
+}
