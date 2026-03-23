@@ -1,45 +1,58 @@
-# FLOOWBOX - Meeting Notes to Action Items with AI
+# FLOOWBOX - Meeting Notes to Action Items (Whisper + GPT-4o)
 
-Raw meeting notes in → structured action items, decisions, and summary email out. No more "who was supposed to do what?" after every call.
+I used to spend 20-30 minutes after every client call writing up notes and action items. Now I upload the recording and get a structured summary in under 2 minutes.
 
 ## What it does
 
-Paste any meeting notes or transcript into the workflow. GPT-4o extracts a clean summary, all action items with owners and deadlines, key decisions made, and next steps. The result gets emailed automatically to all attendees.
+Upload any meeting audio file via webhook. OpenAI Whisper transcribes the recording. GPT-4o then analyzes the transcript and extracts a clean summary, action items with owners and deadlines, decisions made, and follow-ups required. Everything gets saved to Notion as a new page and emailed to all attendees automatically.
 
 ## Tools Used
 - **Orchestration:** n8n
-- **AI:** OpenAI GPT-4o
-- **Email:** Gmail / SMTP
-- **Trigger:** Manual
+- **Transcription:** OpenAI Whisper (whisper-1)
+- **Analysis:** OpenAI GPT-4o
+- **Storage:** Notion database
+- **Email:** SMTP
+- **Trigger:** Webhook (upload audio file)
 
 ## Flow
+
 ```
-Manual Trigger
-  → Set meeting title, date, attendees, raw notes
-  → GPT-4o extracts structured summary
-  → Format email
-  → Send to all attendees
+Meeting Audio Upload (Webhook)
+  → Whisper transcribes audio → full text
+  → GPT-4o extracts:
+      - Summary (3-4 sentences)
+      - Action items (owner + task + deadline)
+      - Decisions made
+      - Follow-ups required
+  → Parse structured JSON
+  → Save to Notion page
+  → Email summary to all attendees
 ```
 
-## What the AI extracts
+## Output format
 
-- Meeting summary (3-4 sentences)
-- Action items (task + owner + deadline)
-- Key decisions made
-- Next steps
-- Follow-up date
+```json
+{
+  "summary": "Team discussed Q2 automation roadmap...",
+  "action_items": [
+    {"owner": "Navtej", "task": "Send proposal draft", "deadline": "Mar 25"},
+    {"owner": "Client", "task": "Share API access", "deadline": "Mar 22"}
+  ],
+  "decisions": ["Approved 3-month engagement", "Starting with WhatsApp automation"],
+  "follow_ups": ["Schedule technical discovery call"]
+}
+```
 
 ## Why I built this
 
-Every FLOOWBOX client call was ending with me manually writing up notes and sending a follow-up email. With multiple clients this was 30-45 minutes of admin after every call. Now I paste the notes and it's done in 10 seconds.
+Client meetings generate a lot of verbal commitments that get forgotten. Having auto-extracted action items with owners and deadlines sent to everyone immediately after the call has eliminated the "I thought you were doing that" problem completely.
 
-## How to use
+## Setup
 
-1. After any meeting, paste your raw notes into the `raw_notes` field
-2. Add attendee emails to `attendees_emails` (comma separated)
-3. Run the workflow
-4. Everyone gets a clean summary within seconds
+1. OpenAI API key (for both Whisper and GPT-4o)
+2. Notion integration + Database ID
+3. SMTP credentials for email
+4. POST audio file URL to webhook endpoint
 
-## Extending this
-
-Connect to Fireflies.ai or Otter.ai webhook to trigger automatically when a meeting recording is processed — fully zero-touch meeting documentation.
+## Supported audio formats
+mp3, mp4, mpeg, mpga, m4a, wav, webm — anything Whisper supports.
