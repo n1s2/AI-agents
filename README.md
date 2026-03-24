@@ -1,5 +1,5 @@
 Hi, I'm Navtej 👋
-Founder @ FLOOWBOX · AI Automation Engineer · MS in AI (Target: Fall 2027)
+Founder @ FLOOWBOX · AI Automation Engineer.
 I build AI agents and automation workflows that solve real business problems — not demos, not tutorials. Production systems that clients actually use.
 My focus: bridging the gap between AI research and practical business implementation.
 
