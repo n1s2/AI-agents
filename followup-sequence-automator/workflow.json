@@ -1,0 +1,174 @@
+{
+  "name": "FLOOWBOX - Follow-up Sequence Automator",
+  "meta": {
+    "instanceId": "navtej-floowbox-n8n-2025"
+  },
+  "nodes": [
+    {
+      "id": "node-001",
+      "name": "Daily Check Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 300],
+      "parameters": {
+        "rule": {
+          "interval": [{"field": "days", "triggerAtHour": 9}]
+        }
+      },
+      "typeVersion": 1.2
+    },
+    {
+      "id": "node-002",
+      "name": "Fetch Contacted Leads",
+      "type": "n8n-nodes-base.airtable",
+      "position": [460, 300],
+      "parameters": {
+        "operation": "search",
+        "baseId": "YOUR_AIRTABLE_BASE_ID",
+        "tableId": "Leads",
+        "filterByFormula": "AND({Status} = 'Contacted', {Follow Up Count} < 3, DATETIME_DIFF(TODAY(), {Contacted Date}, 'days') >= {Next Follow Up Days})"
+      },
+      "typeVersion": 2.1
+    },
+    {
+      "id": "node-003",
+      "name": "Check Follow Up Number",
+      "type": "n8n-nodes-base.switch",
+      "position": [680, 300],
+      "parameters": {
+        "dataType": "number",
+        "value1": "={{ $json.fields['Follow Up Count'] }}",
+        "rules": {
+          "rules": [
+            {"value2": 0, "output": 0},
+            {"value2": 1, "output": 1},
+            {"value2": 2, "output": 2}
+          ]
+        }
+      },
+      "typeVersion": 3
+    },
+    {
+      "id": "node-004",
+      "name": "Write Follow Up 1",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "position": [900, 160],
+      "parameters": {
+        "promptType": "define",
+        "text": "=Write a short follow-up email (follow-up #1, sent 3 days after first email).\n\nProspect: {{ $json.fields['Name'] }}\nCompany: {{ $json.fields['Company'] }}\nOriginal Email Subject: {{ $json.fields['Email Subject Sent'] }}\n\nRules:\n- Reference the previous email briefly\n- Add one new value point or insight\n- Keep it under 60 words\n- End with a soft CTA (reply yes/no)\n- No desperation, stay peer-to-peer\n\nReturn JSON: {\"subject\": \"Re: [original subject]\", \"body\": \"\"}"
+      },
+      "typeVersion": 1.5
+    },
+    {
+      "id": "node-005",
+      "name": "Write Follow Up 2",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "position": [900, 320],
+      "parameters": {
+        "promptType": "define",
+        "text": "=Write follow-up #2 (sent 7 days after first email). This is a different angle — not repeating the same pitch.\n\nProspect: {{ $json.fields['Name'] }}\nCompany: {{ $json.fields['Company'] }}\n\nRules:\n- Completely different angle from original email\n- Share a relevant case study or result (make it realistic)\n- 50 words max\n- Casual tone\n\nReturn JSON: {\"subject\": \"\", \"body\": \"\"}"
+      },
+      "typeVersion": 1.5
+    },
+    {
+      "id": "node-006",
+      "name": "Write Breakup Email",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "position": [900, 480],
+      "parameters": {
+        "promptType": "define",
+        "text": "=Write a breakup email (final follow-up, sent 14 days after first email).\n\nProspect: {{ $json.fields['Name'] }}\nCompany: {{ $json.fields['Company'] }}\n\nRules:\n- Light, non-needy tone\n- Let them know this is the last email\n- Leave door open for future\n- Under 40 words\n- Subject: something like 'Closing the loop'\n\nReturn JSON: {\"subject\": \"\", \"body\": \"\"}"
+      },
+      "typeVersion": 1.5
+    },
+    {
+      "id": "node-007",
+      "name": "OpenAI GPT-4o",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "position": [900, 640],
+      "parameters": {
+        "model": "gpt-4o",
+        "options": {}
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "node-008",
+      "name": "Parse and Send Email",
+      "type": "n8n-nodes-base.code",
+      "position": [1120, 300],
+      "parameters": {
+        "jsCode": "const raw = $input.item.json.text.replace(/```json|```/g, '').trim();\nconst email = JSON.parse(raw);\nreturn [{ json: { ...email, lead: $('Fetch Contacted Leads').item.json.fields, lead_id: $('Fetch Contacted Leads').item.json.id } }];"
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "node-009",
+      "name": "Send Follow Up",
+      "type": "n8n-nodes-base.emailSend",
+      "position": [1340, 300],
+      "parameters": {
+        "toEmail": "={{ $json.lead['Email'] }}",
+        "fromEmail": "navtej@floowbox.com",
+        "subject": "={{ $json.subject }}",
+        "html": "={{ $json.body.replace(/\n/g, '<br>') }}",
+        "options": {}
+      },
+      "typeVersion": 2.1
+    },
+    {
+      "id": "node-010",
+      "name": "Update Follow Up Count",
+      "type": "n8n-nodes-base.airtable",
+      "position": [1560, 300],
+      "parameters": {
+        "operation": "update",
+        "baseId": "YOUR_AIRTABLE_BASE_ID",
+        "tableId": "Leads",
+        "id": "={{ $json.lead_id }}",
+        "fieldsUi": {
+          "fieldValues": [
+            {"fieldId": "Follow Up Count", "fieldValue": "={{ ($json.lead['Follow Up Count'] || 0) + 1 }}"},
+            {"fieldId": "Last Follow Up Date", "fieldValue": "={{ $now.toFormat('yyyy-MM-dd') }}"},
+            {"fieldId": "Status", "fieldValue": "={{ ($json.lead['Follow Up Count'] || 0) >= 2 ? 'Sequence Complete' : 'Contacted' }}"}
+          ]
+        }
+      },
+      "typeVersion": 2.1
+    },
+    {
+      "id": "node-sticky-1",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [220, 140],
+      "parameters": {
+        "content": "## FLOOWBOX - Follow-up Sequence\n3-email automated sequence after cold email:\n- Follow-up 1: Day 3 — different value point\n- Follow-up 2: Day 7 — case study angle\n- Breakup: Day 14 — close the loop\n\nEach email written fresh by GPT-4o.\nTracks count in Airtable, stops after 3 follow-ups."
+      },
+      "typeVersion": 1
+    }
+  ],
+  "connections": {
+    "Daily Check Trigger": {"main": [[{"node": "Fetch Contacted Leads", "type": "main", "index": 0}]]},
+    "Fetch Contacted Leads": {"main": [[{"node": "Check Follow Up Number", "type": "main", "index": 0}]]},
+    "Check Follow Up Number": {
+      "main": [
+        [{"node": "Write Follow Up 1", "type": "main", "index": 0}],
+        [{"node": "Write Follow Up 2", "type": "main", "index": 0}],
+        [{"node": "Write Breakup Email", "type": "main", "index": 0}]
+      ]
+    },
+    "Write Follow Up 1": {"main": [[{"node": "Parse and Send Email", "type": "main", "index": 0}]]},
+    "Write Follow Up 2": {"main": [[{"node": "Parse and Send Email", "type": "main", "index": 0}]]},
+    "Write Breakup Email": {"main": [[{"node": "Parse and Send Email", "type": "main", "index": 0}]]},
+    "OpenAI GPT-4o": {
+      "ai_languageModel": [
+        [{"node": "Write Follow Up 1", "type": "ai_languageModel", "index": 0}],
+        [{"node": "Write Follow Up 2", "type": "ai_languageModel", "index": 0}],
+        [{"node": "Write Breakup Email", "type": "ai_languageModel", "index": 0}]
+      ]
+    },
+    "Parse and Send Email": {"main": [[{"node": "Send Follow Up", "type": "main", "index": 0}]]},
+    "Send Follow Up": {"main": [[{"node": "Update Follow Up Count", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"}
+}

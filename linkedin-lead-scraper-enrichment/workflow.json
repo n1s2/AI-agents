@@ -1,0 +1,162 @@
+{
+  "name": "FLOOWBOX - LinkedIn Lead Scraper and Enrichment Agent",
+  "meta": {
+    "instanceId": "navtej-floowbox-n8n-2025"
+  },
+  "nodes": [
+    {
+      "id": "node-001",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "position": [240, 300],
+      "parameters": {},
+      "typeVersion": 1
+    },
+    {
+      "id": "node-002",
+      "name": "Set Search Params",
+      "type": "n8n-nodes-base.set",
+      "position": [460, 300],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {"id": "e1", "name": "job_title", "type": "string", "value": "Founder"},
+            {"id": "e2", "name": "industry", "type": "string", "value": "SaaS"},
+            {"id": "e3", "name": "location", "type": "string", "value": "India"},
+            {"id": "e4", "name": "max_results", "type": "number", "value": 25}
+          ]
+        }
+      },
+      "typeVersion": 3.4
+    },
+    {
+      "id": "node-003",
+      "name": "Scrape LinkedIn via Apify",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [680, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.apify.com/v2/acts/curious_coder~linkedin-profile-scraper/runs",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"searchUrl\": \"https://www.linkedin.com/search/results/people/?keywords={{ $json.job_title }}&industry={{ $json.industry }}\",\n  \"maxResults\": {{ $json.max_results }}\n}"
+      },
+      "typeVersion": 4.2
+    },
+    {
+      "id": "node-004",
+      "name": "Wait for Apify Run",
+      "type": "n8n-nodes-base.wait",
+      "position": [900, 300],
+      "parameters": {
+        "amount": 30,
+        "unit": "seconds"
+      },
+      "typeVersion": 1.1
+    },
+    {
+      "id": "node-005",
+      "name": "Fetch Apify Results",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1100, 300],
+      "parameters": {
+        "url": "=https://api.apify.com/v2/acts/curious_coder~linkedin-profile-scraper/runs/{{ $('Scrape LinkedIn via Apify').item.json.data.id }}/dataset/items",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "typeVersion": 4.2
+    },
+    {
+      "id": "node-006",
+      "name": "Split into Profiles",
+      "type": "n8n-nodes-base.splitOut",
+      "position": [1300, 300],
+      "parameters": {
+        "fieldToSplitOut": "items",
+        "options": {}
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "node-007",
+      "name": "Enrich with AI",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "position": [1500, 300],
+      "parameters": {
+        "promptType": "define",
+        "text": "=Analyze this LinkedIn profile and enrich it for sales outreach.\n\nName: {{ $json.fullName }}\nTitle: {{ $json.headline }}\nCompany: {{ $json.company }}\nLocation: {{ $json.location }}\nSummary: {{ $json.summary }}\n\nProvide JSON:\n{\n  \"icp_match\": true/false,\n  \"icp_score\": 1-10,\n  \"pain_points\": [\"likely pain point 1\", \"pain point 2\"],\n  \"outreach_angle\": \"one sentence personalized hook for cold email\",\n  \"best_time_to_contact\": \"morning/afternoon/evening\"\n}"
+      },
+      "typeVersion": 1.5
+    },
+    {
+      "id": "node-008",
+      "name": "OpenAI GPT-4o",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "position": [1500, 460],
+      "parameters": {
+        "model": "gpt-4o",
+        "options": {}
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "node-009",
+      "name": "Filter ICP Matches",
+      "type": "n8n-nodes-base.code",
+      "position": [1700, 300],
+      "parameters": {
+        "jsCode": "const raw = $input.item.json.text.replace(/```json|```/g, '').trim();\nconst enriched = JSON.parse(raw);\nif (!enriched.icp_match || enriched.icp_score < 6) return [];\nreturn [{ json: { ...enriched, profile: $('Split into Profiles').item.json } }];"
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "node-010",
+      "name": "Save to Airtable CRM",
+      "type": "n8n-nodes-base.airtable",
+      "position": [1900, 300],
+      "parameters": {
+        "operation": "create",
+        "baseId": "YOUR_AIRTABLE_BASE_ID",
+        "tableId": "Leads",
+        "fieldsUi": {
+          "fieldValues": [
+            {"fieldId": "Name", "fieldValue": "={{ $json.profile.fullName }}"},
+            {"fieldId": "Title", "fieldValue": "={{ $json.profile.headline }}"},
+            {"fieldId": "Company", "fieldValue": "={{ $json.profile.company }}"},
+            {"fieldId": "LinkedIn URL", "fieldValue": "={{ $json.profile.linkedinUrl }}"},
+            {"fieldId": "ICP Score", "fieldValue": "={{ $json.icp_score }}"},
+            {"fieldId": "Outreach Angle", "fieldValue": "={{ $json.outreach_angle }}"},
+            {"fieldId": "Status", "fieldValue": "New Lead"},
+            {"fieldId": "Source", "fieldValue": "LinkedIn Scraper"}
+          ]
+        }
+      },
+      "typeVersion": 2.1
+    },
+    {
+      "id": "node-sticky-1",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [220, 140],
+      "parameters": {
+        "content": "## FLOOWBOX - LinkedIn Lead Scraper\nSearches LinkedIn by job title + industry + location.\nApify handles the scraping. GPT-4o scores each profile against ICP and generates a personalized outreach angle.\nOnly high-score leads (6+/10) go to Airtable.\n\nChange job_title, industry, location in Set Search Params node."
+      },
+      "typeVersion": 1
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {"main": [[{"node": "Set Search Params", "type": "main", "index": 0}]]},
+    "Set Search Params": {"main": [[{"node": "Scrape LinkedIn via Apify", "type": "main", "index": 0}]]},
+    "Scrape LinkedIn via Apify": {"main": [[{"node": "Wait for Apify Run", "type": "main", "index": 0}]]},
+    "Wait for Apify Run": {"main": [[{"node": "Fetch Apify Results", "type": "main", "index": 0}]]},
+    "Fetch Apify Results": {"main": [[{"node": "Split into Profiles", "type": "main", "index": 0}]]},
+    "Split into Profiles": {"main": [[{"node": "Enrich with AI", "type": "main", "index": 0}]]},
+    "Enrich with AI": {"main": [[{"node": "Filter ICP Matches", "type": "main", "index": 0}]]},
+    "OpenAI GPT-4o": {"ai_languageModel": [[{"node": "Enrich with AI", "type": "ai_languageModel", "index": 0}]]},
+    "Filter ICP Matches": {"main": [[{"node": "Save to Airtable CRM", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"}
+}

@@ -1,0 +1,147 @@
+{
+  "name": "FLOOWBOX - Cold Email Personalization Agent",
+  "meta": {
+    "instanceId": "navtej-floowbox-n8n-2025"
+  },
+  "nodes": [
+    {
+      "id": "node-001",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 300],
+      "parameters": {
+        "rule": {
+          "interval": [{"field": "days", "triggerAtHour": 8}]
+        }
+      },
+      "typeVersion": 1.2
+    },
+    {
+      "id": "node-002",
+      "name": "Fetch New Leads from Airtable",
+      "type": "n8n-nodes-base.airtable",
+      "position": [460, 300],
+      "parameters": {
+        "operation": "search",
+        "baseId": "YOUR_AIRTABLE_BASE_ID",
+        "tableId": "Leads",
+        "filterByFormula": "AND({Status} = 'New Lead', {Email} != '')"
+      },
+      "typeVersion": 2.1
+    },
+    {
+      "id": "node-003",
+      "name": "Limit to 10 per day",
+      "type": "n8n-nodes-base.limit",
+      "position": [680, 300],
+      "parameters": {
+        "maxItems": 10
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "node-004",
+      "name": "Research Lead Company",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [900, 300],
+      "parameters": {
+        "url": "=https://api.perplexity.ai/chat/completions",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"sonar\",\n  \"messages\": [{\n    \"role\": \"user\",\n    \"content\": \"Find 2-3 recent news or notable facts about {{ $json.fields['Company'] }}. Keep it under 50 words. Focus on growth, funding, product launches, or challenges.\"\n  }],\n  \"search_recency_filter\": \"month\"\n}"
+      },
+      "typeVersion": 4.2
+    },
+    {
+      "id": "node-005",
+      "name": "Write Personalized Email",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "position": [1120, 300],
+      "parameters": {
+        "promptType": "define",
+        "text": "=Write a personalized cold email for this prospect.\n\nProspect: {{ $('Fetch New Leads from Airtable').item.json.fields['Name'] }}\nTitle: {{ $('Fetch New Leads from Airtable').item.json.fields['Title'] }}\nCompany: {{ $('Fetch New Leads from Airtable').item.json.fields['Company'] }}\nOutreach Angle: {{ $('Fetch New Leads from Airtable').item.json.fields['Outreach Angle'] }}\nRecent Company News: {{ $json.choices[0].message.content }}\n\nRules:\n- Subject line: curiosity-driven, under 8 words, no clickbait\n- Opening: reference something specific about them or their company\n- Value prop: one clear sentence about what FLOOWBOX does\n- CTA: ask for 15-minute call, not a demo\n- Total length: under 120 words\n- Tone: peer-to-peer, not salesy\n- Sign: Navtej, FLOOWBOX\n\nReturn JSON: {\"subject\": \"\", \"body\": \"\"}"
+      },
+      "typeVersion": 1.5
+    },
+    {
+      "id": "node-006",
+      "name": "OpenAI GPT-4o",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "position": [1120, 460],
+      "parameters": {
+        "model": "gpt-4o",
+        "options": {}
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "node-007",
+      "name": "Parse Email",
+      "type": "n8n-nodes-base.code",
+      "position": [1340, 300],
+      "parameters": {
+        "jsCode": "const raw = $input.item.json.text.replace(/```json|```/g, '').trim();\nconst email = JSON.parse(raw);\nreturn [{ json: { ...email, lead: $('Fetch New Leads from Airtable').item.json.fields } }];"
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "node-008",
+      "name": "Send Cold Email",
+      "type": "n8n-nodes-base.emailSend",
+      "position": [1560, 300],
+      "parameters": {
+        "toEmail": "={{ $json.lead['Email'] }}",
+        "fromEmail": "navtej@floowbox.com",
+        "subject": "={{ $json.subject }}",
+        "html": "={{ $json.body.replace(/\n/g, '<br>') }}",
+        "options": {}
+      },
+      "typeVersion": 2.1
+    },
+    {
+      "id": "node-009",
+      "name": "Update Lead Status",
+      "type": "n8n-nodes-base.airtable",
+      "position": [1780, 300],
+      "parameters": {
+        "operation": "update",
+        "baseId": "YOUR_AIRTABLE_BASE_ID",
+        "tableId": "Leads",
+        "id": "={{ $('Fetch New Leads from Airtable').item.json.id }}",
+        "fieldsUi": {
+          "fieldValues": [
+            {"fieldId": "Status", "fieldValue": "Contacted"},
+            {"fieldId": "Contacted Date", "fieldValue": "={{ $now.toFormat('yyyy-MM-dd') }}"},
+            {"fieldId": "Email Subject Sent", "fieldValue": "={{ $json.subject }}"}
+          ]
+        }
+      },
+      "typeVersion": 2.1
+    },
+    {
+      "id": "node-sticky-1",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [220, 140],
+      "parameters": {
+        "content": "## FLOOWBOX - Cold Email Personalization Agent\nRuns every morning at 8 AM.\nFetches up to 10 new leads from Airtable.\nPerplexity searches for recent company news.\nGPT-4o writes a fully personalized email using the news + outreach angle.\nSends and updates lead status automatically.\n\nPair with LinkedIn Lead Scraper for a full outbound pipeline."
+      },
+      "typeVersion": 1
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {"main": [[{"node": "Fetch New Leads from Airtable", "type": "main", "index": 0}]]},
+    "Fetch New Leads from Airtable": {"main": [[{"node": "Limit to 10 per day", "type": "main", "index": 0}]]},
+    "Limit to 10 per day": {"main": [[{"node": "Research Lead Company", "type": "main", "index": 0}]]},
+    "Research Lead Company": {"main": [[{"node": "Write Personalized Email", "type": "main", "index": 0}]]},
+    "Write Personalized Email": {"main": [[{"node": "Parse Email", "type": "main", "index": 0}]]},
+    "OpenAI GPT-4o": {"ai_languageModel": [[{"node": "Write Personalized Email", "type": "ai_languageModel", "index": 0}]]},
+    "Parse Email": {"main": [[{"node": "Send Cold Email", "type": "main", "index": 0}]]},
+    "Send Cold Email": {"main": [[{"node": "Update Lead Status", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"}
+}
