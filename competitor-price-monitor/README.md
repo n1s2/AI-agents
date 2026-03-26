@@ -1,49 +1,37 @@
-# FLOOWBOX - Competitor Price Monitor with AI Analysis
+# FLOOWBOX - Competitor Price Monitor
 
-Scrapes competitor pricing pages every day, runs AI analysis comparing their pricing to mine, and sends a daily intelligence report. Always know before your clients ask.
+Knowing what competitors charge — and when they change — is basic business intelligence. I was checking manually every few weeks. Now it runs every morning automatically.
 
 ## What it does
 
-Fetches pricing pages from 2 competitors daily. Extracts all text content from both pages. GPT-4o analyzes both, extracts exact plan names and prices, compares them against FLOOWBOX pricing, identifies gaps and opportunities, and recommends whether to adjust pricing. Sends a clean report to my inbox every morning.
+Runs daily at 7 AM. Scrapes competitor pricing pages using Jina AI reader. GPT-4o extracts structured plan data — names, prices, billing cycles, features. Saves a daily snapshot to Google Sheets for historical tracking. Aggregates all results and emails a competitive intelligence report with a comparison table and one strategic recommendation.
 
 ## Tools Used
 - **Orchestration:** n8n
-- **Scraping:** HTTP Request + HTML extraction
+- **Scraping:** Jina AI reader API
 - **AI:** OpenAI GPT-4o
-- **Email:** SMTP / Gmail
-- **Trigger:** Daily schedule
+- **Storage:** Google Sheets (historical snapshots)
+- **Email:** SMTP
+- **Schedule:** Daily 7 AM
 
 ## Flow
 ```
-Daily at set time
-  → Fetch Competitor 1 pricing page
-  → Fetch Competitor 2 pricing page (parallel)
-  → Extract text from both pages
-  → Merge both results
-  → GPT-4o: extract prices + compare + recommend
-  → Email daily report
+7 AM daily
+  → Load competitor URLs
+  → Scrape each pricing page (Jina AI)
+  → GPT-4o extracts plans, prices, free tier, notable changes
+  → Save snapshot to Google Sheets
+  → Aggregate all competitors
+  → GPT-4o writes comparison report
+  → Email to founder
 ```
-
-## What the AI report includes
-
-1. Competitor 1 — all plans and exact prices extracted
-2. Competitor 2 — all plans and exact prices extracted
-3. Comparison vs FLOOWBOX pricing
-4. Gaps and opportunities identified
-5. Pricing adjustment recommendation
 
 ## Why I built this
 
-Clients sometimes ask "why should I pay X when competitor Y charges Z?" — I need to know that answer before they do. This runs automatically and I get the intel in my inbox every morning without thinking about it.
+A SaaS client discovered a competitor had quietly dropped prices 20% — they found out on a sales call. That's too late. Daily monitoring means you know the same day it happens.
 
 ## Setup
-
-1. Add OpenAI API key
-2. Add email credentials (Gmail OAuth or SMTP)
-3. In "Set Competitor Config" node, replace placeholder URLs with real competitor pricing page URLs
-4. Update `my_pricing` with your actual pricing
-5. Set `alert_email` to your email
-
-## Extending this
-
-Add a Google Sheets log to track pricing changes over time. Add more competitors by duplicating the fetch + extract nodes and adding them to the merge.
+1. Add competitor pricing URLs in Set Competitor URLs node
+2. Jina AI API key (Header Auth)
+3. OpenAI API key
+4. Google Sheets ID + SMTP credentials
