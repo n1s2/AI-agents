@@ -1,0 +1,36 @@
+{
+  "name": "FLOOWBOX - Payroll Anomaly Detector",
+  "meta": { "instanceId": "navtej-floowbox-n8n-2025" },
+  "nodes": [
+    { "id": "n1", "name": "Monthly Payroll Trigger", "type": "n8n-nodes-base.scheduleTrigger", "position": [240, 300], "parameters": { "rule": { "interval": [{"field": "months", "triggerAtDayOfMonth": 25, "triggerAtHour": 10}] } }, "typeVersion": 1.2 },
+    { "id": "n2", "name": "Fetch This Month Payroll", "type": "n8n-nodes-base.googleSheets", "position": [460, 220], "parameters": { "operation": "readRows", "documentId": "YOUR_PAYROLL_SHEET_ID", "sheetName": "Current Month" }, "typeVersion": 4.4 },
+    { "id": "n3", "name": "Fetch Last Month Payroll", "type": "n8n-nodes-base.googleSheets", "position": [460, 400], "parameters": { "operation": "readRows", "documentId": "YOUR_PAYROLL_SHEET_ID", "sheetName": "Previous Month" }, "typeVersion": 4.4 },
+    { "id": "n4", "name": "Aggregate Current", "type": "n8n-nodes-base.aggregate", "position": [680, 220], "parameters": { "aggregate": "aggregateAllItemData", "options": {} }, "typeVersion": 1 },
+    { "id": "n5", "name": "Aggregate Previous", "type": "n8n-nodes-base.aggregate", "position": [680, 400], "parameters": { "aggregate": "aggregateAllItemData", "options": {} }, "typeVersion": 1 },
+    { "id": "n6", "name": "Merge Payroll Data", "type": "n8n-nodes-base.merge", "position": [900, 300], "parameters": { "mode": "combine", "combineBy": "combineAll", "options": {} }, "typeVersion": 3 },
+    { "id": "n7", "name": "Detect Anomalies with AI", "type": "@n8n/n8n-nodes-langchain.chainLlm", "position": [1120, 300], "parameters": { "promptType": "define", "text": "=You are a payroll auditor. Compare this month's payroll to last month and identify anomalies.\n\nThis Month: {{ JSON.stringify($('Aggregate Current').item.json.data) }}\nLast Month: {{ JSON.stringify($('Aggregate Previous').item.json.data) }}\n\nFlag:\n1. Salary changes over 20% (up or down)\n2. New employees not in last month\n3. Employees in last month missing this month\n4. Duplicate employee entries\n5. Total payroll variance over 15%\n\nReturn JSON:\n{\n  \"total_current\": 0,\n  \"total_previous\": 0,\n  \"variance_percent\": 0,\n  \"anomalies\": [{\"employee\": \"\", \"type\": \"\", \"detail\": \"\", \"severity\": \"high/medium/low\"}],\n  \"new_employees\": [],\n  \"removed_employees\": [],\n  \"summary\": \"2-3 sentence plain text\"\n}" }, "typeVersion": 1.5 },
+    { "id": "n8", "name": "OpenAI GPT-4o", "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi", "position": [1120, 460], "parameters": { "model": "gpt-4o", "options": {} }, "typeVersion": 1 },
+    { "id": "n9", "name": "Parse Anomalies", "type": "n8n-nodes-base.code", "position": [1340, 300], "parameters": { "jsCode": "const raw = $input.item.json.text.replace(/```json|```/g,'').trim();\nconst result = JSON.parse(raw);\nconst highCount = result.anomalies.filter(a => a.severity === 'high').length;\nreturn [{ json: { ...result, has_high_anomalies: highCount > 0, high_count: highCount } }];" }, "typeVersion": 2 },
+    { "id": "n10", "name": "High Anomalies?", "type": "n8n-nodes-base.if", "position": [1560, 300], "parameters": { "conditions": { "conditions": [{"leftValue": "={{ $json.has_high_anomalies }}", "rightValue": true, "operator": {"type": "boolean", "operation": "equal"}}] } }, "typeVersion": 2.2 },
+    { "id": "n11", "name": "Urgent Slack Alert", "type": "n8n-nodes-base.slack", "position": [1780, 180], "parameters": { "operation": "post", "channel": "#payroll-alerts", "text": "=🚨 *URGENT: Payroll Anomalies Detected*\n\n{{ $json.summary }}\n\n*High Severity Issues:* {{ $json.high_count }}\n*Variance:* {{ $json.variance_percent }}%\n\n*Issues:*\n{{ $json.anomalies.filter(a=>a.severity==='high').map(a=>`• ${a.employee}: ${a.detail}`).join('\\n') }}\n\nReview before processing payroll." }, "typeVersion": 2.2 },
+    { "id": "n12", "name": "Normal Report Slack", "type": "n8n-nodes-base.slack", "position": [1780, 420], "parameters": { "operation": "post", "channel": "#payroll-alerts", "text": "=✅ *Monthly Payroll Review — No Major Issues*\n\n{{ $json.summary }}\n\n*Variance:* {{ $json.variance_percent }}%\n*New employees:* {{ $json.new_employees.join(', ') || 'None' }}\n*Minor flags:* {{ $json.anomalies.length }}" }, "typeVersion": 2.2 },
+    { "id": "n13", "name": "Send Finance Email", "type": "n8n-nodes-base.emailSend", "position": [1780, 600], "parameters": { "toEmail": "finance@floowbox.com", "fromEmail": "payroll-bot@floowbox.com", "subject": "=Payroll Anomaly Report — {{ $now.toFormat('MMMM yyyy') }}", "html": "=<h2>Payroll Review — {{ $now.toFormat('MMMM yyyy') }}</h2><p>{{ $json.summary }}</p><table border='1' cellpadding='8'><tr><th>Metric</th><th>Value</th></tr><tr><td>This Month Total</td><td>₹{{ $json.total_current }}</td></tr><tr><td>Last Month Total</td><td>₹{{ $json.total_previous }}</td></tr><tr><td>Variance</td><td>{{ $json.variance_percent }}%</td></tr></table><h3>Anomalies ({{ $json.anomalies.length }})</h3><ul>{{ $json.anomalies.map(a=>`<li><b>[${a.severity.toUpperCase()}]</b> ${a.employee}: ${a.detail}</li>`).join('') }}</ul>", "options": {} }, "typeVersion": 2.1 },
+    { "id": "n14", "name": "Sticky Note", "type": "n8n-nodes-base.stickyNote", "position": [220, 140], "parameters": { "content": "## FLOOWBOX - Payroll Anomaly Detector\nRuns on 25th of every month.\nCompares current vs previous month payroll from Google Sheets.\nGPT-4o flags: salary spikes, missing employees, duplicates, total variance.\nUrgent Slack alert if high-severity issues found.\nAlways sends email report to finance." }, "typeVersion": 1 }
+  ],
+  "connections": {
+    "Monthly Payroll Trigger": {"main": [[{"node": "Fetch This Month Payroll", "type": "main", "index": 0}], [{"node": "Fetch Last Month Payroll", "type": "main", "index": 0}]]},
+    "Fetch This Month Payroll": {"main": [[{"node": "Aggregate Current", "type": "main", "index": 0}]]},
+    "Fetch Last Month Payroll": {"main": [[{"node": "Aggregate Previous", "type": "main", "index": 0}]]},
+    "Aggregate Current": {"main": [[{"node": "Merge Payroll Data", "type": "main", "index": 0}]]},
+    "Aggregate Previous": {"main": [[{"node": "Merge Payroll Data", "type": "main", "index": 1}]]},
+    "Merge Payroll Data": {"main": [[{"node": "Detect Anomalies with AI", "type": "main", "index": 0}]]},
+    "Detect Anomalies with AI": {"main": [[{"node": "Parse Anomalies", "type": "main", "index": 0}]]},
+    "OpenAI GPT-4o": {"ai_languageModel": [[{"node": "Detect Anomalies with AI", "type": "ai_languageModel", "index": 0}]]},
+    "Parse Anomalies": {"main": [[{"node": "High Anomalies?", "type": "main", "index": 0}]]},
+    "High Anomalies?": {"main": [[{"node": "Urgent Slack Alert", "type": "main", "index": 0}], [{"node": "Normal Report Slack", "type": "main", "index": 0}]]},
+    "Urgent Slack Alert": {"main": [[{"node": "Send Finance Email", "type": "main", "index": 0}]]},
+    "Normal Report Slack": {"main": [[{"node": "Send Finance Email", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"}
+}

@@ -1,0 +1,26 @@
+{
+  "name": "FLOOWBOX - Employee Onboarding Checklist Agent",
+  "meta": { "instanceId": "navtej-floowbox-n8n-2025" },
+  "nodes": [
+    { "id": "n1", "name": "New Employee Webhook", "type": "n8n-nodes-base.webhook", "position": [240, 300], "parameters": { "path": "new-employee", "httpMethod": "POST", "responseMode": "responseNode" }, "typeVersion": 2 },
+    { "id": "n2", "name": "Set Employee Data", "type": "n8n-nodes-base.set", "position": [460, 300], "parameters": { "assignments": { "assignments": [ {"id":"h1","name":"name","type":"string","value":"={{ $json.name }}"}, {"id":"h2","name":"email","type":"string","value":"={{ $json.email }}"}, {"id":"h3","name":"role","type":"string","value":"={{ $json.role }}"}, {"id":"h4","name":"department","type":"string","value":"={{ $json.department }}"}, {"id":"h5","name":"start_date","type":"string","value":"={{ $json.start_date }}"} ] } }, "typeVersion": 3.4 },
+    { "id": "n3", "name": "Generate Onboarding Plan", "type": "@n8n/n8n-nodes-langchain.chainLlm", "position": [680, 300], "parameters": { "promptType": "define", "text": "=Create a 30-day onboarding checklist for:\nName: {{ $json.name }}\nRole: {{ $json.role }}\nDepartment: {{ $json.department }}\nStart: {{ $json.start_date }}\n\nReturn JSON: {\"week_1\": [{\"day\": 1, \"tasks\": [], \"owner\": \"\"}], \"week_2\": [{\"focus\": \"\", \"tasks\": []}], \"week_3_4\": [{\"focus\": \"\", \"tasks\": []}], \"tools_to_setup\": [], \"people_to_meet\": [], \"success_metrics\": []}" }, "typeVersion": 1.5 },
+    { "id": "n4", "name": "OpenAI GPT-4o", "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi", "position": [680, 460], "parameters": { "model": "gpt-4o", "options": {} }, "typeVersion": 1 },
+    { "id": "n5", "name": "Parse Plan", "type": "n8n-nodes-base.code", "position": [900, 300], "parameters": { "jsCode": "const raw = $input.item.json.text.replace(/```json|```/g,'').trim();\nconst plan = JSON.parse(raw);\nreturn [{ json: { plan, employee: $('Set Employee Data').item.json } }];" }, "typeVersion": 2 },
+    { "id": "n6", "name": "Create Notion Page", "type": "n8n-nodes-base.notion", "position": [1120, 200], "parameters": { "resource": "page", "operation": "create", "databaseId": "YOUR_NOTION_DB_ID", "title": "={{ $json.employee.name }} — Onboarding Plan" }, "typeVersion": 2.2 },
+    { "id": "n7", "name": "Send Welcome Email", "type": "n8n-nodes-base.emailSend", "position": [1120, 360], "parameters": { "toEmail": "={{ $json.employee.email }}", "fromEmail": "hr@floowbox.com", "subject": "=Welcome to the team, {{ $json.employee.name }}!", "html": "=<h2>Welcome {{ $json.employee.name }}!</h2><p>Excited to have you as <b>{{ $json.employee.role }}</b> starting {{ $json.employee.start_date }}.</p><h3>Week 1 Tasks</h3><ul>{{ $json.plan.week_1.map(d=>`<li>Day ${d.day}: ${d.tasks.join(', ')}</li>`).join('') }}</ul><h3>Tools to Set Up</h3><ul>{{ $json.plan.tools_to_setup.map(t=>`<li>${t}</li>`).join('') }}</ul>", "options": {} }, "typeVersion": 2.1 },
+    { "id": "n8", "name": "Notify Manager Slack", "type": "n8n-nodes-base.slack", "position": [1120, 520], "parameters": { "operation": "post", "channel": "#hr-managers", "text": "=👋 *New hire:* {{ $json.employee.name }} | {{ $json.employee.role }} | Starting {{ $json.employee.start_date }}\nOnboarding plan created in Notion." }, "typeVersion": 2.2 },
+    { "id": "n9", "name": "Sticky Note", "type": "n8n-nodes-base.stickyNote", "position": [220, 140], "parameters": { "content": "## FLOOWBOX - Employee Onboarding Agent\nTriggered on new hire. GPT-4o builds role-specific 30-day plan.\nCreates Notion page + welcome email + Slack manager alert.\nBuilt for a client with 20+ hires/year — saves 3 hours per hire." }, "typeVersion": 1 }
+  ],
+  "connections": {
+    "New Employee Webhook": {"main": [[{"node": "Set Employee Data", "type": "main", "index": 0}]]},
+    "Set Employee Data": {"main": [[{"node": "Generate Onboarding Plan", "type": "main", "index": 0}]]},
+    "Generate Onboarding Plan": {"main": [[{"node": "Parse Plan", "type": "main", "index": 0}]]},
+    "OpenAI GPT-4o": {"ai_languageModel": [[{"node": "Generate Onboarding Plan", "type": "ai_languageModel", "index": 0}]]},
+    "Parse Plan": {"main": [[{"node": "Create Notion Page", "type": "main", "index": 0}]]},
+    "Create Notion Page": {"main": [[{"node": "Send Welcome Email", "type": "main", "index": 0}]]},
+    "Send Welcome Email": {"main": [[{"node": "Notify Manager Slack", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"}
+}
