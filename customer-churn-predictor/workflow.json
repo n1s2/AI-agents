@@ -1,0 +1,28 @@
+{
+  "name": "FLOOWBOX - Customer Churn Predictor",
+  "meta": { "instanceId": "navtej-floowbox-n8n-2025" },
+  "nodes": [
+    { "id": "n1", "name": "Weekly Trigger", "type": "n8n-nodes-base.scheduleTrigger", "position": [240, 300], "parameters": { "rule": { "interval": [{"field": "weeks", "triggerAtDay": [1], "triggerAtHour": 9}] } }, "typeVersion": 1.2 },
+    { "id": "n2", "name": "Fetch All Active Customers", "type": "n8n-nodes-base.airtable", "position": [460, 300], "parameters": { "operation": "search", "baseId": "YOUR_AIRTABLE_BASE_ID", "tableId": "Customers", "filterByFormula": "{Status} = 'Active'" }, "typeVersion": 2.1 },
+    { "id": "n3", "name": "Fetch Usage Data", "type": "n8n-nodes-base.googleSheets", "position": [460, 480], "parameters": { "operation": "readRows", "documentId": "YOUR_USAGE_SHEET_ID", "sheetName": "Weekly Usage" }, "typeVersion": 4.4 },
+    { "id": "n4", "name": "Merge Customer + Usage", "type": "n8n-nodes-base.merge", "position": [680, 380], "parameters": { "mode": "combine", "combineBy": "combineAll", "options": {} }, "typeVersion": 3 },
+    { "id": "n5", "name": "Score Each Customer", "type": "@n8n/n8n-nodes-langchain.chainLlm", "position": [900, 380], "parameters": { "promptType": "define", "text": "=Analyze this customer data and predict churn risk for each customer.\n\nCustomers: {{ JSON.stringify($('Fetch All Active Customers').all().map(i=>i.json)) }}\nUsage Data: {{ JSON.stringify($('Fetch Usage Data').all().map(i=>i.json)) }}\n\nFor each customer score churn risk based on:\n- Login frequency (declining = bad)\n- Feature usage (low = bad)\n- Support tickets (high = bad)\n- Contract age (newer = higher risk)\n- Payment history (late = bad)\n- Last activity date\n\nReturn JSON array:\n[{\n  \"customer_id\": \"\",\n  \"customer_name\": \"\",\n  \"churn_score\": 0,\n  \"risk_level\": \"high/medium/low\",\n  \"top_signals\": [\"signal1\", \"signal2\"],\n  \"recommended_action\": \"specific action to take\",\n  \"urgency\": \"immediate/this_week/monitor\"\n}]" }, "typeVersion": 1.5 },
+    { "id": "n6", "name": "OpenAI GPT-4o", "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi", "position": [900, 540], "parameters": { "model": "gpt-4o", "options": {} }, "typeVersion": 1 },
+    { "id": "n7", "name": "Parse Churn Scores", "type": "n8n-nodes-base.code", "position": [1120, 380], "parameters": { "jsCode": "const raw = $input.item.json.text.replace(/```json|```/g,'').trim();\nconst scores = JSON.parse(raw);\nconst high = scores.filter(c => c.risk_level === 'high');\nconst medium = scores.filter(c => c.risk_level === 'medium');\nreturn [{ json: { all_scores: scores, high_risk: high, medium_risk: medium, high_count: high.length, total: scores.length } }];" }, "typeVersion": 2 },
+    { "id": "n8", "name": "Save Scores to Airtable", "type": "n8n-nodes-base.code", "position": [1340, 260], "parameters": { "jsCode": "const scores = $input.item.json.all_scores;\nreturn scores.map(s => ({ json: s }));" }, "typeVersion": 2 },
+    { "id": "n9", "name": "Alert High Risk to Slack", "type": "n8n-nodes-base.slack", "position": [1340, 420], "parameters": { "operation": "post", "channel": "#churn-alerts", "text": "=🚨 *Weekly Churn Risk Report*\n\n*High Risk:* {{ $json.high_count }} customers\n*Total Analyzed:* {{ $json.total }}\n\n{{ $json.high_risk.map(c => `• *${c.customer_name}* (Score: ${c.churn_score}/100)\n  Signals: ${c.top_signals.join(', ')}\n  Action: ${c.recommended_action}`).join('\\n\\n') }}" }, "typeVersion": 2.2 },
+    { "id": "n10", "name": "Send Weekly Report Email", "type": "n8n-nodes-base.emailSend", "position": [1340, 580], "parameters": { "toEmail": "navtej@floowbox.com", "fromEmail": "reports@floowbox.com", "subject": "=Weekly Churn Risk Report — {{ $now.toFormat('MMM dd') }}", "html": "=<h2>Churn Risk Report</h2><p><b>{{ $json.high_count }}</b> high-risk customers this week.</p><h3>High Risk</h3><ul>{{ $json.high_risk.map(c=>`<li><b>${c.customer_name}</b> — Score: ${c.churn_score}/100<br>Signals: ${c.top_signals.join(', ')}<br>Action: ${c.recommended_action}</li>`).join('') }}</ul><h3>Medium Risk</h3><ul>{{ $json.medium_risk.map(c=>`<li>${c.customer_name} — ${c.recommended_action}</li>`).join('') }}</ul>", "options": {} }, "typeVersion": 2.1 },
+    { "id": "n11", "name": "Sticky Note", "type": "n8n-nodes-base.stickyNote", "position": [220, 140], "parameters": { "content": "## FLOOWBOX - Churn Predictor\nRuns every Monday.\nCombines customer CRM data + product usage data.\nGPT-4o scores each customer 0-100 for churn risk.\nHigh risk = immediate Slack alert + action recommendation.\nAll results in weekly email report." }, "typeVersion": 1 }
+  ],
+  "connections": {
+    "Weekly Trigger": {"main": [[{"node": "Fetch All Active Customers", "type": "main", "index": 0}], [{"node": "Fetch Usage Data", "type": "main", "index": 0}]]},
+    "Fetch All Active Customers": {"main": [[{"node": "Merge Customer + Usage", "type": "main", "index": 0}]]},
+    "Fetch Usage Data": {"main": [[{"node": "Merge Customer + Usage", "type": "main", "index": 1}]]},
+    "Merge Customer + Usage": {"main": [[{"node": "Score Each Customer", "type": "main", "index": 0}]]},
+    "Score Each Customer": {"main": [[{"node": "Parse Churn Scores", "type": "main", "index": 0}]]},
+    "OpenAI GPT-4o": {"ai_languageModel": [[{"node": "Score Each Customer", "type": "ai_languageModel", "index": 0}]]},
+    "Parse Churn Scores": {"main": [[{"node": "Save Scores to Airtable", "type": "main", "index": 0}], [{"node": "Alert High Risk to Slack", "type": "main", "index": 0}], [{"node": "Send Weekly Report Email", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"}
+}

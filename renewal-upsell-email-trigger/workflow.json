@@ -1,0 +1,32 @@
+{
+  "name": "FLOOWBOX - Renewal Upsell Email Trigger",
+  "meta": { "instanceId": "navtej-floowbox-n8n-2025" },
+  "nodes": [
+    { "id": "n1", "name": "Daily Check", "type": "n8n-nodes-base.scheduleTrigger", "position": [240, 300], "parameters": { "rule": { "interval": [{"field": "days", "triggerAtHour": 8}] } }, "typeVersion": 1.2 },
+    { "id": "n2", "name": "Fetch Renewal Candidates", "type": "n8n-nodes-base.airtable", "position": [460, 300], "parameters": { "operation": "search", "baseId": "YOUR_AIRTABLE_BASE_ID", "tableId": "Customers", "filterByFormula": "AND({Status}='Active', IS_AFTER({Renewal Date}, TODAY()), IS_BEFORE({Renewal Date}, DATEADD(TODAY(), 60, 'days')), {Upsell Email Sent}=FALSE())" }, "typeVersion": 2.1 },
+    { "id": "n3", "name": "Fetch Usage Signals", "type": "n8n-nodes-base.googleSheets", "position": [460, 480], "parameters": { "operation": "readRows", "documentId": "YOUR_USAGE_SHEET_ID", "sheetName": "Customer Usage" }, "typeVersion": 4.4 },
+    { "id": "n4", "name": "Merge Data", "type": "n8n-nodes-base.merge", "position": [680, 380], "parameters": { "mode": "combine", "combineBy": "combineAll", "options": {} }, "typeVersion": 3 },
+    { "id": "n5", "name": "Identify Upsell Opportunity", "type": "@n8n/n8n-nodes-langchain.chainLlm", "position": [900, 380], "parameters": { "promptType": "define", "text": "=Analyze this customer and determine the best upsell approach for their upcoming renewal.\n\nCustomer: {{ JSON.stringify($('Fetch Renewal Candidates').item.json.fields) }}\nUsage: {{ JSON.stringify($('Fetch Usage Signals').all().map(i=>i.json)) }}\n\nAnalyze:\n1. Are they hitting plan limits? (upsell to higher tier)\n2. Are they using only basic features? (upsell with training offer)\n3. Do they have multiple team members? (upsell to team plan)\n4. High ROI usage? (ask for case study + offer discount on annual)\n\nReturn JSON:\n{\n  \"upsell_type\": \"tier_upgrade/annual_upgrade/team_expansion/training\",\n  \"upsell_reason\": \"one line why this makes sense for them\",\n  \"suggested_plan\": \"\",\n  \"current_plan\": \"\",\n  \"discount_offer\": \"10% annual / free onboarding / etc\",\n  \"email_subject\": \"\",\n  \"email_body\": \"personalized 150 word email body mentioning their usage and the offer\",\n  \"send_email\": true/false\n}" }, "typeVersion": 1.5 },
+    { "id": "n6", "name": "OpenAI GPT-4o", "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi", "position": [900, 540], "parameters": { "model": "gpt-4o", "options": {} }, "typeVersion": 1 },
+    { "id": "n7", "name": "Parse Upsell Plan", "type": "n8n-nodes-base.code", "position": [1120, 380], "parameters": { "jsCode": "const raw = $input.item.json.text.replace(/```json|```/g,'').trim();\nconst upsell = JSON.parse(raw);\nreturn [{ json: { ...upsell, customer: $('Fetch Renewal Candidates').item.json.fields, customer_id: $('Fetch Renewal Candidates').item.json.id } }];" }, "typeVersion": 2 },
+    { "id": "n8", "name": "Should Send?", "type": "n8n-nodes-base.if", "position": [1340, 380], "parameters": { "conditions": { "conditions": [{"leftValue": "={{ $json.send_email }}", "rightValue": true, "operator": {"type": "boolean", "operation": "equal"}}] } }, "typeVersion": 2.2 },
+    { "id": "n9", "name": "Send Upsell Email", "type": "n8n-nodes-base.emailSend", "position": [1560, 260], "parameters": { "toEmail": "={{ $json.customer['Email'] }}", "fromEmail": "navtej@floowbox.com", "subject": "={{ $json.email_subject }}", "html": "=<p>{{ $json.email_body.replace(/\n/g, '<br>') }}</p>", "options": {} }, "typeVersion": 2.1 },
+    { "id": "n10", "name": "Mark Email Sent", "type": "n8n-nodes-base.airtable", "position": [1780, 260], "parameters": { "operation": "update", "baseId": "YOUR_AIRTABLE_BASE_ID", "tableId": "Customers", "id": "={{ $json.customer_id }}", "fieldsUi": { "fieldValues": [ {"fieldId": "Upsell Email Sent", "fieldValue": true}, {"fieldId": "Upsell Type", "fieldValue": "={{ $json.upsell_type }}"}, {"fieldId": "Upsell Email Date", "fieldValue": "={{ $now.toFormat('yyyy-MM-dd') }}"} ] } }, "typeVersion": 2.1 },
+    { "id": "n11", "name": "Log Opportunity to Slack", "type": "n8n-nodes-base.slack", "position": [1560, 480], "parameters": { "operation": "post", "channel": "#revenue", "text": "=💰 *Upsell Opportunity — {{ $json.customer['Name'] }}*\n\n*Type:* {{ $json.upsell_type }}\n*Reason:* {{ $json.upsell_reason }}\n*Offer:* {{ $json.discount_offer }}\n*Renewal in:* {{ Math.round((new Date($json.customer['Renewal Date']) - new Date()) / (1000*60*60*24)) }} days\n*Email sent:* {{ $json.send_email ? 'Yes' : 'No — review needed' }}" }, "typeVersion": 2.2 },
+    { "id": "n12", "name": "Sticky Note", "type": "n8n-nodes-base.stickyNote", "position": [220, 140], "parameters": { "content": "## FLOOWBOX - Renewal Upsell Trigger\nRuns daily. Finds customers within 60 days of renewal.\nGPT-4o analyzes usage to find best upsell angle:\n- Hitting limits → tier upgrade\n- Low usage → training offer\n- Team use → team plan\n- High ROI → annual discount\nSends personalized email + logs to Slack." }, "typeVersion": 1 }
+  ],
+  "connections": {
+    "Daily Check": {"main": [[{"node": "Fetch Renewal Candidates", "type": "main", "index": 0}], [{"node": "Fetch Usage Signals", "type": "main", "index": 0}]]},
+    "Fetch Renewal Candidates": {"main": [[{"node": "Merge Data", "type": "main", "index": 0}]]},
+    "Fetch Usage Signals": {"main": [[{"node": "Merge Data", "type": "main", "index": 1}]]},
+    "Merge Data": {"main": [[{"node": "Identify Upsell Opportunity", "type": "main", "index": 0}]]},
+    "Identify Upsell Opportunity": {"main": [[{"node": "Parse Upsell Plan", "type": "main", "index": 0}]]},
+    "OpenAI GPT-4o": {"ai_languageModel": [[{"node": "Identify Upsell Opportunity", "type": "ai_languageModel", "index": 0}]]},
+    "Parse Upsell Plan": {"main": [[{"node": "Should Send?", "type": "main", "index": 0}]]},
+    "Should Send?": {"main": [[{"node": "Send Upsell Email", "type": "main", "index": 0}], [{"node": "Log Opportunity to Slack", "type": "main", "index": 0}]]},
+    "Send Upsell Email": {"main": [[{"node": "Mark Email Sent", "type": "main", "index": 0}]]},
+    "Mark Email Sent": {"main": [[{"node": "Log Opportunity to Slack", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"}
+}
