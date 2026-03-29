@@ -1,0 +1,26 @@
+{
+  "name": "FLOOWBOX - LinkedIn Post Scheduler and Repurposer",
+  "meta": { "instanceId": "navtej-floowbox-n8n-2025" },
+  "nodes": [
+    { "id": "n1", "name": "Weekly Content Trigger", "type": "n8n-nodes-base.scheduleTrigger", "position": [240, 300], "parameters": { "rule": { "interval": [{"field": "weeks", "triggerAtDay": [0], "triggerAtHour": 20}] } }, "typeVersion": 1.2 },
+    { "id": "n2", "name": "Fetch Approved Content", "type": "n8n-nodes-base.notion", "position": [460, 300], "parameters": { "resource": "databasePage", "operation": "getAll", "databaseId": "YOUR_NOTION_CONTENT_DB", "filterType": "manual", "filters": { "conditions": [{"key": "Status", "condition": "equals", "statusValue": "Approved"}] } }, "typeVersion": 2.2 },
+    { "id": "n3", "name": "Limit to This Week", "type": "n8n-nodes-base.limit", "position": [680, 300], "parameters": { "maxItems": 5 }, "typeVersion": 1 },
+    { "id": "n4", "name": "Generate LinkedIn Post", "type": "@n8n/n8n-nodes-langchain.chainLlm", "position": [900, 300], "parameters": { "promptType": "define", "text": "=Transform this content into a high-performing LinkedIn post.\n\nOriginal content:\nTitle: {{ $json.properties.Name?.title[0]?.plain_text || '' }}\nContent: {{ $json.properties['Content']?.rich_text[0]?.plain_text || '' }}\nType: {{ $json.properties['Content Type']?.select?.name || 'insight' }}\n\nLinkedIn post rules:\n- Opening line: make it impossible to ignore (no 'I am excited to share')\n- Structure: short punchy paragraphs, never more than 2 lines each\n- Add white space between paragraphs\n- Personal angle: connect to a real experience or observation\n- End with a question to drive comments\n- Length: 150-300 words optimal\n- No hashtag spam — max 3 relevant hashtags at the end\n- No corporate buzzwords\n\nReturn JSON:\n{\n  \"post_text\": \"\",\n  \"hashtags\": [],\n  \"best_day\": \"Tuesday/Wednesday/Thursday\",\n  \"best_time\": \"7-9 AM / 12-1 PM / 5-6 PM\",\n  \"hook_type\": \"question/statistic/story/contrarian\"\n}" }, "typeVersion": 1.5 },
+    { "id": "n5", "name": "OpenAI GPT-4o", "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi", "position": [900, 460], "parameters": { "model": "gpt-4o", "options": {} }, "typeVersion": 1 },
+    { "id": "n6", "name": "Parse Post", "type": "n8n-nodes-base.code", "position": [1120, 300], "parameters": { "jsCode": "const raw = $input.item.json.text.replace(/```json|```/g,'').trim();\nconst post = JSON.parse(raw);\nconst fullText = post.post_text + '\\n\\n' + post.hashtags.map(h=>'#'+h).join(' ');\nreturn [{ json: { ...post, full_post: fullText, notion_page_id: $('Fetch Approved Content').item.json.id } }];" }, "typeVersion": 2 },
+    { "id": "n7", "name": "Schedule in Buffer", "type": "n8n-nodes-base.httpRequest", "position": [1340, 200], "parameters": { "method": "POST", "url": "https://api.bufferapp.com/1/updates/create.json", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendBody": true, "contentType": "form-urlencoded", "bodyParameters": { "parameters": [ {"name": "text", "value": "={{ $json.full_post }}"}, {"name": "profile_ids[]", "value": "YOUR_LINKEDIN_PROFILE_ID"}, {"name": "scheduled_at", "value": "={{ $now.plus({days: 1}).set({hour: 8}).toISO() }}"} ] } }, "typeVersion": 4.2 },
+    { "id": "n8", "name": "Update Notion Status", "type": "n8n-nodes-base.notion", "position": [1340, 380], "parameters": { "resource": "databasePage", "operation": "update", "pageId": "={{ $json.notion_page_id }}", "propertiesUi": { "propertyValues": [{"key": "Status", "selectValue": "Scheduled"}] } }, "typeVersion": 2.2 },
+    { "id": "n9", "name": "Weekly Preview Slack", "type": "n8n-nodes-base.slack", "position": [1340, 540], "parameters": { "operation": "post", "channel": "#content", "text": "=📅 *This week's LinkedIn posts scheduled*\n\n{{ $json.best_day }} {{ $json.best_time }}\n\n{{ $json.full_post.substring(0, 300) }}..." }, "typeVersion": 2.2 },
+    { "id": "n10", "name": "Sticky Note", "type": "n8n-nodes-base.stickyNote", "position": [220, 140], "parameters": { "content": "## FLOOWBOX - LinkedIn Post Scheduler\nRuns every Sunday evening.\nFetches approved content from Notion.\nGPT-4o rewrites each piece in LinkedIn-optimized format.\nSchedules via Buffer API.\nUpdates Notion status to Scheduled.\nPosts weekly preview to Slack." }, "typeVersion": 1 }
+  ],
+  "connections": {
+    "Weekly Content Trigger": {"main": [[{"node": "Fetch Approved Content", "type": "main", "index": 0}]]},
+    "Fetch Approved Content": {"main": [[{"node": "Limit to This Week", "type": "main", "index": 0}]]},
+    "Limit to This Week": {"main": [[{"node": "Generate LinkedIn Post", "type": "main", "index": 0}]]},
+    "Generate LinkedIn Post": {"main": [[{"node": "Parse Post", "type": "main", "index": 0}]]},
+    "OpenAI GPT-4o": {"ai_languageModel": [[{"node": "Generate LinkedIn Post", "type": "ai_languageModel", "index": 0}]]},
+    "Parse Post": {"main": [[{"node": "Schedule in Buffer", "type": "main", "index": 0}], [{"node": "Update Notion Status", "type": "main", "index": 0}], [{"node": "Weekly Preview Slack", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"}
+}

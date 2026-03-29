@@ -1,0 +1,25 @@
+{
+  "name": "FLOOWBOX - Twitter Thread Generator from Blog Post",
+  "meta": { "instanceId": "navtej-floowbox-n8n-2025" },
+  "nodes": [
+    { "id": "n1", "name": "Manual Trigger", "type": "n8n-nodes-base.manualTrigger", "position": [240, 300], "parameters": {}, "typeVersion": 1 },
+    { "id": "n2", "name": "Set Blog URL", "type": "n8n-nodes-base.set", "position": [460, 300], "parameters": { "assignments": { "assignments": [ {"id":"k1","name":"blog_url","type":"string","value":"https://your-blog.com/post-url-here"}, {"id":"k2","name":"author_handle","type":"string","value":"@navtej_floowbox"}, {"id":"k3","name":"thread_style","type":"string","value":"educational"} ] } }, "typeVersion": 3.4 },
+    { "id": "n3", "name": "Fetch Blog Content", "type": "n8n-nodes-base.httpRequest", "position": [680, 300], "parameters": { "url": "=https://r.jina.ai/{{ $json.blog_url }}", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth" }, "typeVersion": 4.2 },
+    { "id": "n4", "name": "Generate Thread", "type": "@n8n/n8n-nodes-langchain.chainLlm", "position": [900, 300], "parameters": { "promptType": "define", "text": "=Convert this blog post into a high-engagement Twitter/X thread.\n\nAuthor: {{ $('Set Blog URL').item.json.author_handle }}\nStyle: {{ $('Set Blog URL').item.json.thread_style }}\n\nBlog Content:\n{{ $json.data }}\n\nRules:\n- Tweet 1: Hook — make people stop scrolling (under 200 chars, no 'Thread:' or numbering)\n- Tweets 2-8: One insight per tweet, max 250 chars each\n- Tweet 9: Controversial or surprising takeaway\n- Tweet 10: CTA + follow ask\n- Each tweet must stand alone\n- No filler, no generic advice\n- Conversational, not corporate\n\nReturn JSON:\n{\n  \"thread\": [\n    {\"tweet_number\": 1, \"text\": \"\", \"type\": \"hook\"},\n    {\"tweet_number\": 2, \"text\": \"\", \"type\": \"insight\"}\n  ],\n  \"thread_topic\": \"\",\n  \"estimated_reach\": \"low/medium/high\"\n}" }, "typeVersion": 1.5 },
+    { "id": "n5", "name": "OpenAI GPT-4o", "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi", "position": [900, 460], "parameters": { "model": "gpt-4o", "options": {} }, "typeVersion": 1 },
+    { "id": "n6", "name": "Parse Thread", "type": "n8n-nodes-base.code", "position": [1120, 300], "parameters": { "jsCode": "const raw = $input.item.json.text.replace(/```json|```/g,'').trim();\nconst data = JSON.parse(raw);\nreturn [{ json: data }];" }, "typeVersion": 2 },
+    { "id": "n7", "name": "Save to Notion", "type": "n8n-nodes-base.notion", "position": [1340, 200], "parameters": { "resource": "page", "operation": "create", "databaseId": "YOUR_NOTION_CONTENT_DB", "title": "=Twitter Thread — {{ $json.thread_topic }}", "propertiesUi": { "propertyValues": [ {"key": "Platform", "selectValue": "Twitter/X"}, {"key": "Status", "selectValue": "Draft"}, {"key": "Hook", "textValue": "={{ $json.thread[0].text }}"}, {"key": "Estimated Reach", "selectValue": "={{ $json.estimated_reach }}"} ] } }, "typeVersion": 2.2 },
+    { "id": "n8", "name": "Format for Preview", "type": "n8n-nodes-base.code", "position": [1340, 420], "parameters": { "jsCode": "const thread = $input.item.json.thread;\nconst formatted = thread.map((t,i) => `${i+1}/${thread.length}\\n${t.text}`).join('\\n\\n---\\n\\n');\nreturn [{ json: { formatted_thread: formatted, tweet_count: thread.length, hook: thread[0].text, topic: $input.item.json.thread_topic } }];" }, "typeVersion": 2 },
+    { "id": "n9", "name": "Sticky Note", "type": "n8n-nodes-base.stickyNote", "position": [220, 140], "parameters": { "content": "## FLOOWBOX - Twitter Thread Generator\nPaste a blog URL → get a 10-tweet thread in seconds.\nJina AI fetches the full article content.\nGPT-4o converts it into hook + insights + CTA format.\nSaves draft to Notion content calendar.\n\nChange blog_url in Set Blog URL node." }, "typeVersion": 1 }
+  ],
+  "connections": {
+    "Manual Trigger": {"main": [[{"node": "Set Blog URL", "type": "main", "index": 0}]]},
+    "Set Blog URL": {"main": [[{"node": "Fetch Blog Content", "type": "main", "index": 0}]]},
+    "Fetch Blog Content": {"main": [[{"node": "Generate Thread", "type": "main", "index": 0}]]},
+    "Generate Thread": {"main": [[{"node": "Parse Thread", "type": "main", "index": 0}]]},
+    "OpenAI GPT-4o": {"ai_languageModel": [[{"node": "Generate Thread", "type": "ai_languageModel", "index": 0}]]},
+    "Parse Thread": {"main": [[{"node": "Save to Notion", "type": "main", "index": 0}], [{"node": "Format for Preview", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"}
+}
