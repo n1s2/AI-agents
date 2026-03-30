@@ -1,0 +1,26 @@
+{
+  "name": "FLOOWBOX - Pinterest Pin Auto-Creator",
+  "meta": { "instanceId": "navtej-floowbox-n8n-2025" },
+  "nodes": [
+    { "id": "n1", "name": "Weekly Pin Trigger", "type": "n8n-nodes-base.scheduleTrigger", "position": [240, 300], "parameters": { "rule": { "interval": [{"field": "weeks", "triggerAtDay": [2], "triggerAtHour": 9}] } }, "typeVersion": 1.2 },
+    { "id": "n2", "name": "Fetch Blog Posts", "type": "n8n-nodes-base.httpRequest", "position": [460, 300], "parameters": { "url": "https://your-blog.com/wp-json/wp/v2/posts?per_page=5&status=publish", "options": {} }, "typeVersion": 4.2 },
+    { "id": "n3", "name": "Split Posts", "type": "n8n-nodes-base.splitOut", "position": [680, 300], "parameters": { "fieldToSplitOut": "", "options": {} }, "typeVersion": 1 },
+    { "id": "n4", "name": "Generate Pin Content", "type": "@n8n/n8n-nodes-langchain.chainLlm", "position": [900, 300], "parameters": { "promptType": "define", "text": "=Create Pinterest pin content for this blog post.\n\nTitle: {{ $json.title.rendered }}\nExcerpt: {{ $json.excerpt.rendered.replace(/<[^>]+>/g, '') }}\nURL: {{ $json.link }}\n\nPinterest is a search engine. Write for discoverability.\n\nReturn JSON:\n{\n  \"pin_title\": \"keyword-rich title under 100 chars\",\n  \"pin_description\": \"keyword-rich description 150-300 chars, natural language, no hashtag spam\",\n  \"keywords\": [\"5-8 relevant search keywords\"],\n  \"board_suggestion\": \"which type of board this fits\",\n  \"image_prompt\": \"description of ideal pin image for this content (vertical, 2:3 ratio)\",\n  \"best_pin_format\": \"standard/video/idea/carousel\",\n  \"cta\": \"call to action text overlay for the image\"\n}" }, "typeVersion": 1.5 },
+    { "id": "n5", "name": "OpenAI GPT-4o", "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi", "position": [900, 460], "parameters": { "model": "gpt-4o", "options": {} }, "typeVersion": 1 },
+    { "id": "n6", "name": "Parse Pin Data", "type": "n8n-nodes-base.code", "position": [1120, 300], "parameters": { "jsCode": "const raw = $input.item.json.text.replace(/```json|```/g,'').trim();\nconst pin = JSON.parse(raw);\nreturn [{ json: { ...pin, source_url: $('Split Posts').item.json.link, post_title: $('Split Posts').item.json.title.rendered } }];" }, "typeVersion": 2 },
+    { "id": "n7", "name": "Create Pinterest Pin", "type": "n8n-nodes-base.httpRequest", "position": [1340, 200], "parameters": { "method": "POST", "url": "https://api.pinterest.com/v5/pins", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendBody": true, "specifyBody": "json", "jsonBody": "={\n  \"title\": \"{{ $json.pin_title }}\",\n  \"description\": \"{{ $json.pin_description }}\",\n  \"link\": \"{{ $json.source_url }}\",\n  \"board_id\": \"YOUR_PINTEREST_BOARD_ID\",\n  \"media_source\": {\n    \"source_type\": \"image_url\",\n    \"url\": \"{{ $json.source_url }}/og-image.jpg\"\n  }\n}" }, "typeVersion": 4.2 },
+    { "id": "n8", "name": "Save to Content Log", "type": "n8n-nodes-base.googleSheets", "position": [1340, 380], "parameters": { "operation": "appendOrUpdate", "documentId": "YOUR_SHEET_ID", "sheetName": "Pinterest Pins", "fieldsUi": { "fieldValues": [ {"fieldId": "Date", "fieldValue": "={{ $now.toFormat('yyyy-MM-dd') }}"}, {"fieldId": "Post Title", "fieldValue": "={{ $json.post_title }}"}, {"fieldId": "Pin Title", "fieldValue": "={{ $json.pin_title }}"}, {"fieldId": "Board", "fieldValue": "={{ $json.board_suggestion }}"}, {"fieldId": "Keywords", "fieldValue": "={{ $json.keywords.join(', ') }}"} ] } }, "typeVersion": 4.4 },
+    { "id": "n9", "name": "Weekly Pins Slack", "type": "n8n-nodes-base.slack", "position": [1340, 540], "parameters": { "operation": "post", "channel": "#content", "text": "=📌 *Pinterest Pins Created This Week*\n\n{{ $json.pin_title }}\n*Board:* {{ $json.board_suggestion }}\n*Keywords:* {{ $json.keywords.join(', ') }}\n*CTA:* {{ $json.cta }}" }, "typeVersion": 2.2 },
+    { "id": "n10", "name": "Sticky Note", "type": "n8n-nodes-base.stickyNote", "position": [220, 140], "parameters": { "content": "## FLOOWBOX - Pinterest Pin Auto-Creator\nRuns every Tuesday at 9 AM.\nFetches latest blog posts from WordPress API.\nGPT-4o writes keyword-rich Pinterest titles, descriptions, and board suggestions.\nCreates pins via Pinterest API.\nLogs all to Google Sheets.\n\nUpdate YOUR_PINTEREST_BOARD_ID and blog URL." }, "typeVersion": 1 }
+  ],
+  "connections": {
+    "Weekly Pin Trigger": {"main": [[{"node": "Fetch Blog Posts", "type": "main", "index": 0}]]},
+    "Fetch Blog Posts": {"main": [[{"node": "Split Posts", "type": "main", "index": 0}]]},
+    "Split Posts": {"main": [[{"node": "Generate Pin Content", "type": "main", "index": 0}]]},
+    "Generate Pin Content": {"main": [[{"node": "Parse Pin Data", "type": "main", "index": 0}]]},
+    "OpenAI GPT-4o": {"ai_languageModel": [[{"node": "Generate Pin Content", "type": "ai_languageModel", "index": 0}]]},
+    "Parse Pin Data": {"main": [[{"node": "Create Pinterest Pin", "type": "main", "index": 0}], [{"node": "Save to Content Log", "type": "main", "index": 0}], [{"node": "Weekly Pins Slack", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"}
+}
