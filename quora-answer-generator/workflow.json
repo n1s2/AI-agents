@@ -1,0 +1,29 @@
+{
+  "name": "FLOOWBOX - Quora Answer Generator for Brand",
+  "meta": { "instanceId": "navtej-floowbox-n8n-2025" },
+  "nodes": [
+    { "id": "n1", "name": "Daily Search", "type": "n8n-nodes-base.scheduleTrigger", "position": [240, 300], "parameters": { "rule": { "interval": [{"field": "days", "triggerAtHour": 8}] } }, "typeVersion": 1.2 },
+    { "id": "n2", "name": "Search Quora via Perplexity", "type": "n8n-nodes-base.httpRequest", "position": [460, 300], "parameters": { "method": "POST", "url": "https://api.perplexity.ai/chat/completions", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendBody": true, "specifyBody": "json", "jsonBody": "{\n  \"model\": \"sonar\",\n  \"messages\": [{\"role\": \"user\", \"content\": \"Find 5 recent Quora questions about: AI automation for business, n8n workflows, automating business processes, or no-code AI agents. For each question give me the exact question title and the Quora URL. Focus on questions that have been asked in the last 30 days and have few or no answers yet.\"}],\n  \"search_recency_filter\": \"month\"\n}" }, "typeVersion": 4.2 },
+    { "id": "n3", "name": "Extract Questions", "type": "@n8n/n8n-nodes-langchain.chainLlm", "position": [680, 300], "parameters": { "promptType": "define", "text": "=Parse this search result and extract the Quora questions found.\n\nSearch result:\n{{ $json.choices[0].message.content }}\n\nReturn JSON array:\n[\n  {\"question\": \"exact question text\", \"url\": \"quora url or empty string\", \"topic\": \"main topic\"}\n]" }, "typeVersion": 1.5 },
+    { "id": "n4", "name": "OpenAI GPT-4o", "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi", "position": [680, 460], "parameters": { "model": "gpt-4o", "options": {} }, "typeVersion": 1 },
+    { "id": "n5", "name": "Parse Questions", "type": "n8n-nodes-base.code", "position": [900, 300], "parameters": { "jsCode": "const raw = $input.item.json.text.replace(/```json|```/g,'').trim();\nconst questions = JSON.parse(raw);\nreturn questions.map(q => ({ json: q }));" }, "typeVersion": 2 },
+    { "id": "n6", "name": "Write Expert Answer", "type": "@n8n/n8n-nodes-langchain.chainLlm", "position": [1120, 300], "parameters": { "promptType": "define", "text": "=Write a high-quality Quora answer for this question as Navtej, founder of FLOOWBOX.\n\nQuestion: {{ $json.question }}\nTopic: {{ $json.topic }}\n\nAnswer rules:\n- Start with a direct answer to the question, no fluff\n- Share a specific example or real experience\n- Structure: answer → example → practical steps → optional FLOOWBOX mention (only if genuinely relevant, not salesy)\n- Length: 300-500 words\n- Conversational expert tone\n- End with a genuine insight or counterintuitive point\n- No bullet point spam — use prose\n\nReturn JSON:\n{\n  \"question\": \"{{ $json.question }}\",\n  \"answer\": \"full answer text\",\n  \"word_count\": 0,\n  \"floowbox_mentioned\": true,\n  \"key_insight\": \"one sentence summary of the main point\"\n}" }, "typeVersion": 1.5 },
+    { "id": "n7", "name": "OpenAI GPT-4o 2", "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi", "position": [1120, 460], "parameters": { "model": "gpt-4o", "options": {} }, "typeVersion": 1 },
+    { "id": "n8", "name": "Parse Answers", "type": "n8n-nodes-base.code", "position": [1340, 300], "parameters": { "jsCode": "const raw = $input.item.json.text.replace(/```json|```/g,'').trim();\nreturn [{ json: JSON.parse(raw) }];" }, "typeVersion": 2 },
+    { "id": "n9", "name": "Save to Notion Queue", "type": "n8n-nodes-base.notion", "position": [1560, 200], "parameters": { "resource": "page", "operation": "create", "databaseId": "YOUR_NOTION_CONTENT_DB", "title": "={{ $json.question.substring(0, 80) }}", "propertiesUi": { "propertyValues": [ {"key": "Platform", "selectValue": "Quora"}, {"key": "Status", "selectValue": "Ready to Post"}, {"key": "Key Insight", "textValue": "={{ $json.key_insight }}"} ] } }, "typeVersion": 2.2 },
+    { "id": "n10", "name": "Daily Answers Slack", "type": "n8n-nodes-base.slack", "position": [1560, 420], "parameters": { "operation": "post", "channel": "#content", "text": "=💬 *Quora Answer Ready*\n\n*Q:* {{ $json.question }}\n*Key insight:* {{ $json.key_insight }}\n*Word count:* {{ $json.word_count }}\n\nAnswer saved to Notion — review and post manually." }, "typeVersion": 2.2 },
+    { "id": "n11", "name": "Sticky Note", "type": "n8n-nodes-base.stickyNote", "position": [220, 140], "parameters": { "content": "## FLOOWBOX - Quora Answer Generator\nRuns every morning at 8 AM.\nPerplexity finds recent unanswered Quora questions in your niche.\nGPT-4o writes expert-level answers as Navtej/FLOOWBOX.\nSaves to Notion for review before posting.\nSlack notification when answers are ready.\n\nAlways review before posting — Quora penalizes low quality." }, "typeVersion": 1 }
+  ],
+  "connections": {
+    "Daily Search": {"main": [[{"node": "Search Quora via Perplexity", "type": "main", "index": 0}]]},
+    "Search Quora via Perplexity": {"main": [[{"node": "Extract Questions", "type": "main", "index": 0}]]},
+    "Extract Questions": {"main": [[{"node": "Parse Questions", "type": "main", "index": 0}]]},
+    "OpenAI GPT-4o": {"ai_languageModel": [[{"node": "Extract Questions", "type": "ai_languageModel", "index": 0}]]},
+    "Parse Questions": {"main": [[{"node": "Write Expert Answer", "type": "main", "index": 0}]]},
+    "Write Expert Answer": {"main": [[{"node": "Parse Answers", "type": "main", "index": 0}]]},
+    "OpenAI GPT-4o 2": {"ai_languageModel": [[{"node": "Write Expert Answer", "type": "ai_languageModel", "index": 0}]]},
+    "Parse Answers": {"main": [[{"node": "Save to Notion Queue", "type": "main", "index": 0}], [{"node": "Daily Answers Slack", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"}
+}

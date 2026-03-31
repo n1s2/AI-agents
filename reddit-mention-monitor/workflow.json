@@ -1,0 +1,30 @@
+{
+  "name": "FLOOWBOX - Reddit Mention Monitor and Alert",
+  "meta": { "instanceId": "navtej-floowbox-n8n-2025" },
+  "nodes": [
+    { "id": "n1", "name": "Hourly Check", "type": "n8n-nodes-base.scheduleTrigger", "position": [240, 300], "parameters": { "rule": { "interval": [{"field": "hours", "triggerAtMinute": 0}] } }, "typeVersion": 1.2 },
+    { "id": "n2", "name": "Set Brand Keywords", "type": "n8n-nodes-base.set", "position": [460, 300], "parameters": { "assignments": { "assignments": [ {"id":"r1","name":"keywords","type":"array","value":"=[\"FLOOWBOX\", \"n8n automation\", \"AI workflow automation\", \"no-code AI agent\"]"}, {"id":"r2","name":"subreddits","type":"string","value":"entrepreneur,SaaS,artificial,n8n,automation,startups"} ] } }, "typeVersion": 3.4 },
+    { "id": "n3", "name": "Search Reddit API", "type": "n8n-nodes-base.httpRequest", "position": [680, 300], "parameters": { "url": "=https://www.reddit.com/search.json", "sendQuery": true, "queryParameters": { "parameters": [ {"name": "q", "value": "={{ $json.keywords[0] }}"}, {"name": "sort", "value": "new"}, {"name": "limit", "value": "25"}, {"name": "restrict_sr", "value": "false"}, {"name": "t", "value": "day"} ] }, "options": { "response": { "response": { "fullResponse": false } } } }, "typeVersion": 4.2 },
+    { "id": "n4", "name": "Split Results", "type": "n8n-nodes-base.splitOut", "position": [900, 300], "parameters": { "fieldToSplitOut": "data.children", "options": {} }, "typeVersion": 1 },
+    { "id": "n5", "name": "Filter Relevant Posts", "type": "n8n-nodes-base.filter", "position": [1100, 300], "parameters": { "conditions": { "options": {"caseSensitive": false}, "conditions": [{"leftValue": "={{ $json.data.score }}", "rightValue": 2, "operator": {"type": "number", "operation": "gte"}}] } }, "typeVersion": 2.2 },
+    { "id": "n6", "name": "Classify Mention", "type": "@n8n/n8n-nodes-langchain.chainLlm", "position": [1300, 300], "parameters": { "promptType": "define", "text": "=Analyze this Reddit post and classify it for FLOOWBOX brand monitoring.\n\nTitle: {{ $json.data.title }}\nContent: {{ $json.data.selftext || 'No body text' }}\nSubreddit: r/{{ $json.data.subreddit }}\nScore: {{ $json.data.score }}\nURL: https://reddit.com{{ $json.data.permalink }}\n\nReturn JSON:\n{\n  \"mention_type\": \"direct_brand/competitor_comparison/industry_question/lead_opportunity/negative\",\n  \"sentiment\": \"positive/neutral/negative\",\n  \"should_respond\": true,\n  \"response_urgency\": \"immediate/today/low\",\n  \"suggested_response\": \"a helpful, non-promotional Reddit reply if applicable\",\n  \"opportunity_score\": 0\n}" }, "typeVersion": 1.5 },
+    { "id": "n7", "name": "OpenAI GPT-4o", "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi", "position": [1300, 460], "parameters": { "model": "gpt-4o", "options": {} }, "typeVersion": 1 },
+    { "id": "n8", "name": "Parse Classification", "type": "n8n-nodes-base.code", "position": [1500, 300], "parameters": { "jsCode": "const raw = $input.item.json.text.replace(/```json|```/g,'').trim();\nconst cls = JSON.parse(raw);\nreturn [{ json: { ...cls, post: $('Split Results').item.json.data } }];" }, "typeVersion": 2 },
+    { "id": "n9", "name": "High Value Only", "type": "n8n-nodes-base.filter", "position": [1700, 300], "parameters": { "conditions": { "conditions": [{"leftValue": "={{ $json.opportunity_score }}", "rightValue": 5, "operator": {"type": "number", "operation": "gte"}}] } }, "typeVersion": 2.2 },
+    { "id": "n10", "name": "Slack Alert", "type": "n8n-nodes-base.slack", "position": [1900, 300], "parameters": { "operation": "post", "channel": "#brand-mentions", "text": "=🔴 *Reddit Mention — {{ $json.mention_type }}*\n\n*Subreddit:* r/{{ $json.post.subreddit }}\n*Title:* {{ $json.post.title }}\n*Score:* {{ $json.post.score }} | *Sentiment:* {{ $json.sentiment }}\n*Urgency:* {{ $json.response_urgency }}\n*URL:* https://reddit.com{{ $json.post.permalink }}\n\n*Suggested Reply:*\n{{ $json.suggested_response }}" }, "typeVersion": 2.2 },
+    { "id": "n11", "name": "Sticky Note", "type": "n8n-nodes-base.stickyNote", "position": [220, 140], "parameters": { "content": "## FLOOWBOX - Reddit Monitor\nRuns hourly. Searches Reddit for brand mentions and industry keywords.\nGPT-4o classifies each mention and scores opportunity.\nOnly high-value mentions (score 5+) trigger Slack alerts.\nIncludes AI-written reply suggestion for each mention." }, "typeVersion": 1 }
+  ],
+  "connections": {
+    "Hourly Check": {"main": [[{"node": "Set Brand Keywords", "type": "main", "index": 0}]]},
+    "Set Brand Keywords": {"main": [[{"node": "Search Reddit API", "type": "main", "index": 0}]]},
+    "Search Reddit API": {"main": [[{"node": "Split Results", "type": "main", "index": 0}]]},
+    "Split Results": {"main": [[{"node": "Filter Relevant Posts", "type": "main", "index": 0}]]},
+    "Filter Relevant Posts": {"main": [[{"node": "Classify Mention", "type": "main", "index": 0}]]},
+    "Classify Mention": {"main": [[{"node": "Parse Classification", "type": "main", "index": 0}]]},
+    "OpenAI GPT-4o": {"ai_languageModel": [[{"node": "Classify Mention", "type": "ai_languageModel", "index": 0}]]},
+    "Parse Classification": {"main": [[{"node": "High Value Only", "type": "main", "index": 0}]]},
+    "High Value Only": {"main": [[{"node": "Slack Alert", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"}
+}
