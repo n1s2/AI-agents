@@ -1,0 +1,33 @@
+{
+  "name": "FLOOWBOX - Academic Paper Summarizer (ArXiv + Semantic Scholar)",
+  "meta": { "instanceId": "navtej-floowbox-n8n-2025" },
+  "nodes": [
+    { "id": "n1", "name": "Paper Request Webhook", "type": "n8n-nodes-base.webhook", "position": [240, 300], "parameters": { "path": "summarize-paper", "httpMethod": "POST", "responseMode": "responseNode" }, "typeVersion": 2 },
+    { "id": "n2", "name": "Set Paper Config", "type": "n8n-nodes-base.set", "position": [460, 300], "parameters": { "assignments": { "assignments": [ {"id":"ap1","name":"paper_url","type":"string","value":"={{ $json.url || '' }}"}, {"id":"ap2","name":"arxiv_id","type":"string","value":"={{ $json.arxiv_id || '' }}"}, {"id":"ap3","name":"audience","type":"string","value":"={{ $json.audience || 'researcher' }}"}, {"id":"ap4","name":"focus","type":"string","value":"={{ $json.focus || 'all' }}"} ] } }, "typeVersion": 3.4 },
+    { "id": "n3", "name": "Fetch ArXiv Metadata", "type": "n8n-nodes-base.httpRequest", "position": [680, 200], "parameters": { "url": "=http://export.arxiv.org/api/query?id_list={{ $json.arxiv_id || $json.paper_url.split('/abs/').pop() }}", "options": {} }, "typeVersion": 4.2 },
+    { "id": "n4", "name": "Fetch Full Paper Content", "type": "n8n-nodes-base.httpRequest", "position": [680, 400], "parameters": { "url": "=https://r.jina.ai/https://ar5iv.labs.arxiv.org/html/{{ $json.arxiv_id || $json.paper_url.split('/abs/').pop() }}", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth" }, "typeVersion": 4.2 },
+    { "id": "n5", "name": "Parse Metadata", "type": "n8n-nodes-base.code", "position": [900, 200], "parameters": { "jsCode": "const xml = $input.item.json.data || '';\nconst title = xml.match(/<title>([^<]+)<\\/title>/)?.[1]?.replace('\\n','').trim() || 'Unknown';\nconst authors = [...xml.matchAll(/<name>([^<]+)<\\/name>/g)].map(m=>m[1]).join(', ');\nconst published = xml.match(/<published>([^<]+)<\\/published>/)?.[1]?.split('T')[0] || '';\nconst abstract = xml.match(/<summary[^>]*>([\\s\\S]+?)<\\/summary>/)?.[1]?.trim() || '';\nreturn [{ json: { title, authors, published, abstract } }];" }, "typeVersion": 2 },
+    { "id": "n6", "name": "Process Paper Content", "type": "n8n-nodes-base.code", "position": [900, 400], "parameters": { "jsCode": "const content = $input.item.json.data || '';\nconst clean = content.replace(/<[^>]+>/g,' ').replace(/\\s+/g,' ').substring(0,6000);\nreturn [{ json: { content: clean } }];" }, "typeVersion": 2 },
+    { "id": "n7", "name": "Merge Paper Data", "type": "n8n-nodes-base.merge", "position": [1100, 300], "parameters": { "mode": "combine", "combineBy": "combineAll", "options": {} }, "typeVersion": 3 },
+    { "id": "n8", "name": "Generate Summary", "type": "@n8n/n8n-nodes-langchain.chainLlm", "position": [1300, 300], "parameters": { "promptType": "define", "text": "=Summarize this academic paper for a {{ $('Set Paper Config').item.json.audience }}.\n\nTitle: {{ $('Parse Metadata').item.json.title }}\nAuthors: {{ $('Parse Metadata').item.json.authors }}\nPublished: {{ $('Parse Metadata').item.json.published }}\nAbstract: {{ $('Parse Metadata').item.json.abstract }}\n\nPaper content:\n{{ $('Process Paper Content').item.json.content }}\n\nReturn JSON:\n{\n  \"title\": \"\",\n  \"authors\": \"\",\n  \"published\": \"\",\n  \"tldr\": \"one sentence — what this paper does and why it matters\",\n  \"problem_solved\": \"\",\n  \"methodology\": \"\",\n  \"key_findings\": [],\n  \"limitations\": [],\n  \"practical_applications\": [],\n  \"related_work\": [],\n  \"plain_summary\": \"4-5 sentence summary for non-specialists\",\n  \"technical_summary\": \"4-5 sentence summary for researchers\",\n  \"citation\": \"formatted citation string\"\n}" }, "typeVersion": 1.5 },
+    { "id": "n9", "name": "OpenAI GPT-4o", "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi", "position": [1300, 460], "parameters": { "model": "gpt-4o", "options": {} }, "typeVersion": 1 },
+    { "id": "n10", "name": "Parse Summary", "type": "n8n-nodes-base.code", "position": [1500, 300], "parameters": { "jsCode": "const raw = $input.item.json.text.replace(/```json|```/g,'').trim();\nreturn [{ json: JSON.parse(raw) }];" }, "typeVersion": 2 },
+    { "id": "n11", "name": "Save to Notion Library", "type": "n8n-nodes-base.notion", "position": [1700, 200], "parameters": { "resource": "page", "operation": "create", "databaseId": "YOUR_NOTION_DB_ID", "title": "={{ $json.title }}", "propertiesUi": { "propertyValues": [{"key": "Authors", "textValue": "={{ $json.authors }}"}, {"key": "Published", "textValue": "={{ $json.published }}"}, {"key": "TL;DR", "textValue": "={{ $json.tldr }}"}] } }, "typeVersion": 2.2 },
+    { "id": "n12", "name": "Respond with Summary", "type": "n8n-nodes-base.respondToWebhook", "position": [1700, 420], "parameters": { "respondWith": "json", "responseBody": "={{ JSON.stringify($json) }}" }, "typeVersion": 1.1 },
+    { "id": "n13", "name": "Sticky Note", "type": "n8n-nodes-base.stickyNote", "position": [220, 140], "parameters": { "content": "## FLOOWBOX - Academic Paper Summarizer\nSend any ArXiv paper ID or URL.\nFetches metadata (title, authors, abstract) from ArXiv API.\nFetches full HTML content via ar5iv + Jina AI.\nGPT-4o generates: TL;DR, methodology, findings, limitations, applications.\nTwo summary versions: plain English + technical.\nSaves to Notion research library with citation.\n\nBuilt for MS in AI application prep — staying current with research." }, "typeVersion": 1 }
+  ],
+  "connections": {
+    "Paper Request Webhook": {"main": [[{"node": "Set Paper Config", "type": "main", "index": 0}]]},
+    "Set Paper Config": {"main": [[{"node": "Fetch ArXiv Metadata", "type": "main", "index": 0}], [{"node": "Fetch Full Paper Content", "type": "main", "index": 0}]]},
+    "Fetch ArXiv Metadata": {"main": [[{"node": "Parse Metadata", "type": "main", "index": 0}]]},
+    "Fetch Full Paper Content": {"main": [[{"node": "Process Paper Content", "type": "main", "index": 0}]]},
+    "Parse Metadata": {"main": [[{"node": "Merge Paper Data", "type": "main", "index": 0}]]},
+    "Process Paper Content": {"main": [[{"node": "Merge Paper Data", "type": "main", "index": 1}]]},
+    "Merge Paper Data": {"main": [[{"node": "Generate Summary", "type": "main", "index": 0}]]},
+    "Generate Summary": {"main": [[{"node": "Parse Summary", "type": "main", "index": 0}]]},
+    "OpenAI GPT-4o": {"ai_languageModel": [[{"node": "Generate Summary", "type": "ai_languageModel", "index": 0}]]},
+    "Parse Summary": {"main": [[{"node": "Save to Notion Library", "type": "main", "index": 0}], [{"node": "Respond with Summary", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"}
+}
