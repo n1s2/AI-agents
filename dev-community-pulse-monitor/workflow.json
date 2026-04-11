@@ -1,0 +1,34 @@
+{
+  "name": "FLOOWBOX - Developer Community Pulse Monitor",
+  "meta": { "instanceId": "navtej-floowbox-n8n-2025" },
+  "nodes": [
+    { "id": "n1", "name": "Weekly Dev Pulse Trigger", "type": "n8n-nodes-base.scheduleTrigger", "position": [240, 300], "parameters": { "rule": { "interval": [{"field": "weeks", "triggerAtDay": [5], "triggerAtHour": 9}] } }, "typeVersion": 1.2 },
+    { "id": "n2", "name": "Set Pulse Config", "type": "n8n-nodes-base.set", "position": [460, 300], "parameters": { "assignments": { "assignments": [ {"id":"dp1","name":"topics","type":"string","value":"AI agents, LLM APIs, n8n, workflow automation, RAG, prompt engineering"}, {"id":"dp2","name":"communities","type":"string","value":"Hacker News, Dev.to, r/MachineLearning, r/LocalLLaMA, r/n8n"} ] } }, "typeVersion": 3.4 },
+    { "id": "n3", "name": "Fetch HN Top Posts", "type": "n8n-nodes-base.httpRequest", "position": [680, 180], "parameters": { "url": "https://hacker-news.firebaseio.com/v0/topstories.json", "options": {} }, "typeVersion": 4.2 },
+    { "id": "n4", "name": "Get Top 5 Story Details", "type": "n8n-nodes-base.code", "position": [880, 180], "parameters": { "jsCode": "const ids = $input.item.json.slice(0,5);\nreturn ids.map(id => ({ json: { id } }));" }, "typeVersion": 2 },
+    { "id": "n5", "name": "Fetch HN Story", "type": "n8n-nodes-base.httpRequest", "position": [1080, 180], "parameters": { "url": "=https://hacker-news.firebaseio.com/v0/item/{{ $json.id }}.json", "options": {} }, "typeVersion": 4.2 },
+    { "id": "n6", "name": "Fetch Reddit Dev Pulse", "type": "n8n-nodes-base.httpRequest", "position": [680, 380], "parameters": { "url": "https://www.reddit.com/r/MachineLearning+LocalLLaMA+n8n/top.json", "sendQuery": true, "queryParameters": { "parameters": [{"name": "t", "value": "week"}, {"name": "limit", "value": "10"}] } }, "typeVersion": 4.2 },
+    { "id": "n7", "name": "Fetch Dev.to Trending", "type": "n8n-nodes-base.httpRequest", "position": [680, 560], "parameters": { "url": "https://dev.to/api/articles", "sendQuery": true, "queryParameters": { "parameters": [{"name": "tag", "value": "ai"}, {"name": "top", "value": "7"}, {"name": "per_page", "value": "10"}] } }, "typeVersion": 4.2 },
+    { "id": "n8", "name": "Aggregate Community Data", "type": "n8n-nodes-base.aggregate", "position": [1280, 380], "parameters": { "aggregate": "aggregateAllItemData", "options": {} }, "typeVersion": 1 },
+    { "id": "n9", "name": "Synthesize Dev Pulse", "type": "@n8n/n8n-nodes-langchain.chainLlm", "position": [1480, 380], "parameters": { "promptType": "define", "text": "=Analyze this week's developer community pulse across multiple platforms.\n\nTopics focus: {{ $('Set Pulse Config').item.json.topics }}\n\nHacker News Top Stories:\n{{ JSON.stringify($('Fetch HN Story').all().map(i=>({title:i.json.title,score:i.json.score,url:i.json.url}))) }}\n\nReddit ML/AI Posts:\n{{ JSON.stringify($('Fetch Reddit Dev Pulse').item.json.data?.children?.slice(0,5).map(p=>({title:p.data.title,score:p.data.score,subreddit:p.data.subreddit}))) }}\n\nDev.to Articles:\n{{ JSON.stringify($('Fetch Dev.to Trending').item.json?.slice(0,5).map(a=>({title:a.title,reactions:a.positive_reactions_count,tags:a.tag_list}))) }}\n\nReturn JSON:\n{\n  \"hottest_topics\": [],\n  \"developer_concerns\": [],\n  \"tools_being_discussed\": [],\n  \"tutorials_in_demand\": [],\n  \"controversies\": [],\n  \"consensus_emerging\": [],\n  \"community_mood\": \"excited/cautious/frustrated/neutral\",\n  \"what_to_build_based_on_demand\": [],\n  \"weekly_pulse_summary\": \"3-4 sentence summary of developer community this week\"\n}" }, "typeVersion": 1.5 },
+    { "id": "n10", "name": "OpenAI GPT-4o", "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi", "position": [1480, 540], "parameters": { "model": "gpt-4o", "options": {} }, "typeVersion": 1 },
+    { "id": "n11", "name": "Parse Pulse", "type": "n8n-nodes-base.code", "position": [1680, 380], "parameters": { "jsCode": "const raw = $input.item.json.text.replace(/```json|```/g,'').trim();\nreturn [{ json: JSON.parse(raw) }];" }, "typeVersion": 2 },
+    { "id": "n12", "name": "Weekly Pulse Slack", "type": "n8n-nodes-base.slack", "position": [1880, 300], "parameters": { "operation": "post", "channel": "#dev-trends", "text": "=💻 *Weekly Dev Community Pulse*\n\n*Community mood:* {{ $json.community_mood }}\n\n{{ $json.weekly_pulse_summary }}\n\n*Hottest topics:*\n{{ $json.hottest_topics.slice(0,4).map(t=>`• ${t}`).join('\\n') }}\n\n*What devs want to learn:*\n{{ $json.tutorials_in_demand.slice(0,3).map(t=>`• ${t}`).join('\\n') }}\n\n*Build opportunities:*\n{{ $json.what_to_build_based_on_demand.slice(0,2).map(b=>`• ${b}`).join('\\n') }}" }, "typeVersion": 2.2 },
+    { "id": "n13", "name": "Sticky Note", "type": "n8n-nodes-base.stickyNote", "position": [220, 140], "parameters": { "content": "## FLOOWBOX - Dev Community Pulse\nRuns every Friday at 9 AM.\nData from:\n- Hacker News top 5 stories (live API)\n- Reddit ML/AI/n8n top posts this week\n- Dev.to trending AI articles\nGPT-4o synthesizes: hottest topics, dev concerns, build opportunities.\nIdentifies what tutorials are in demand = content ideas.\nWeekly Slack brief." }, "typeVersion": 1 }
+  ],
+  "connections": {
+    "Weekly Dev Pulse Trigger": {"main": [[{"node": "Set Pulse Config", "type": "main", "index": 0}]]},
+    "Set Pulse Config": {"main": [[{"node": "Fetch HN Top Posts", "type": "main", "index": 0}], [{"node": "Fetch Reddit Dev Pulse", "type": "main", "index": 0}], [{"node": "Fetch Dev.to Trending", "type": "main", "index": 0}]]},
+    "Fetch HN Top Posts": {"main": [[{"node": "Get Top 5 Story Details", "type": "main", "index": 0}]]},
+    "Get Top 5 Story Details": {"main": [[{"node": "Fetch HN Story", "type": "main", "index": 0}]]},
+    "Fetch HN Story": {"main": [[{"node": "Aggregate Community Data", "type": "main", "index": 0}]]},
+    "Fetch Reddit Dev Pulse": {"main": [[{"node": "Aggregate Community Data", "type": "main", "index": 0}]]},
+    "Fetch Dev.to Trending": {"main": [[{"node": "Aggregate Community Data", "type": "main", "index": 0}]]},
+    "Aggregate Community Data": {"main": [[{"node": "Synthesize Dev Pulse", "type": "main", "index": 0}]]},
+    "Synthesize Dev Pulse": {"main": [[{"node": "Parse Pulse", "type": "main", "index": 0}]]},
+    "OpenAI GPT-4o": {"ai_languageModel": [[{"node": "Synthesize Dev Pulse", "type": "ai_languageModel", "index": 0}]]},
+    "Parse Pulse": {"main": [[{"node": "Weekly Pulse Slack", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"}
+}
