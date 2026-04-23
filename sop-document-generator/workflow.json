@@ -1,0 +1,23 @@
+{
+  "name": "FLOOWBOX - SOP Document Generator",
+  "meta": { "instanceId": "navtej-floowbox-n8n-2025" },
+  "nodes": [
+    { "id": "n1", "name": "SOP Request Webhook", "type": "n8n-nodes-base.webhook", "position": [240, 300], "parameters": { "path": "generate-sop", "httpMethod": "POST", "responseMode": "responseNode" }, "typeVersion": 2 },
+    { "id": "n2", "name": "Set SOP Config", "type": "n8n-nodes-base.set", "position": [460, 300], "parameters": { "assignments": { "assignments": [ {"id":"sp1","name":"process_name","type":"string","value":"={{ $json.process }}"}, {"id":"sp2","name":"department","type":"string","value":"={{ $json.department || 'Operations' }}"}, {"id":"sp3","name":"process_description","type":"string","value":"={{ $json.description }}"}, {"id":"sp4","name":"audience","type":"string","value":"={{ $json.audience || 'new team members' }}"} ] } }, "typeVersion": 3.4 },
+    { "id": "n3", "name": "Generate SOP", "type": "@n8n/n8n-nodes-langchain.chainLlm", "position": [680, 300], "parameters": { "promptType": "define", "text": "=Create a professional Standard Operating Procedure document.\n\nProcess: {{ $json.process_name }}\nDepartment: {{ $json.department }}\nDescription: {{ $json.process_description }}\nAudience: {{ $json.audience }}\n\nWrite a complete SOP including:\n1. Purpose and scope\n2. Roles and responsibilities\n3. Step-by-step procedure (numbered, clear actions)\n4. Tools and resources needed\n5. Quality checkpoints\n6. Common issues and troubleshooting\n7. Revision history table\n\nReturn JSON:\n{\n  \"title\": \"\",\n  \"version\": \"1.0\",\n  \"last_updated\": \"\",\n  \"owner\": \"\",\n  \"purpose\": \"\",\n  \"scope\": \"\",\n  \"roles\": [{\"role\": \"\", \"responsibility\": \"\"}],\n  \"steps\": [{\"step\": 1, \"action\": \"\", \"details\": \"\", \"checkpoint\": \"\"}],\n  \"tools_needed\": [],\n  \"troubleshooting\": [{\"issue\": \"\", \"solution\": \"\"}],\n  \"markdown_doc\": \"complete formatted SOP in markdown\"\n}" }, "typeVersion": 1.5 },
+    { "id": "n4", "name": "OpenAI GPT-4o", "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi", "position": [680, 460], "parameters": { "model": "gpt-4o", "options": {} }, "typeVersion": 1 },
+    { "id": "n5", "name": "Parse SOP", "type": "n8n-nodes-base.code", "position": [900, 300], "parameters": { "jsCode": "const raw = $input.item.json.text.replace(/```json|```/g,'').trim();\nreturn [{ json: JSON.parse(raw) }];" }, "typeVersion": 2 },
+    { "id": "n6", "name": "Save to Notion", "type": "n8n-nodes-base.notion", "position": [1100, 200], "parameters": { "resource": "page", "operation": "create", "databaseId": "YOUR_NOTION_DB_ID", "title": "=SOP: {{ $json.title }}", "propertiesUi": { "propertyValues": [{"key": "Department", "textValue": "={{ $('Set SOP Config').item.json.department }}"}, {"key": "Version", "textValue": "={{ $json.version }}"}, {"key": "Status", "selectValue": "Draft"}] } }, "typeVersion": 2.2 },
+    { "id": "n7", "name": "Respond with SOP", "type": "n8n-nodes-base.respondToWebhook", "position": [1100, 420], "parameters": { "respondWith": "json", "responseBody": "={{ JSON.stringify({ title: $json.title, steps: $json.steps.length, markdown: $json.markdown_doc }) }}" }, "typeVersion": 1.1 },
+    { "id": "n8", "name": "Sticky Note", "type": "n8n-nodes-base.stickyNote", "position": [220, 140], "parameters": { "content": "## SOP Document Generator\nDescribe any process → GPT-4o writes a complete SOP.\nIncludes: purpose, roles, numbered steps, tools, troubleshooting.\nSaves as draft to Notion. Ready to review and publish.\n\nUseful for: onboarding, compliance, process documentation." }, "typeVersion": 1 }
+  ],
+  "connections": {
+    "SOP Request Webhook": {"main": [[{"node": "Set SOP Config", "type": "main", "index": 0}]]},
+    "Set SOP Config": {"main": [[{"node": "Generate SOP", "type": "main", "index": 0}]]},
+    "Generate SOP": {"main": [[{"node": "Parse SOP", "type": "main", "index": 0}]]},
+    "OpenAI GPT-4o": {"ai_languageModel": [[{"node": "Generate SOP", "type": "ai_languageModel", "index": 0}]]},
+    "Parse SOP": {"main": [[{"node": "Save to Notion", "type": "main", "index": 0}], [{"node": "Respond with SOP", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"}
+}
