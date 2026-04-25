@@ -1,0 +1,28 @@
+{
+  "name": "FLOOWBOX - Async Team Standup Collector",
+  "meta": { "instanceId": "navtej-floowbox-n8n-2025" },
+  "nodes": [
+    { "id": "n1", "name": "Morning Standup Trigger", "type": "n8n-nodes-base.scheduleTrigger", "position": [240, 300], "parameters": { "rule": { "interval": [{"field": "days", "triggerAtHour": 9, "triggerAtMinute": 0}] } }, "typeVersion": 1.2 },
+    { "id": "n2", "name": "Send Standup Form to Team", "type": "n8n-nodes-base.slack", "position": [460, 300], "parameters": { "operation": "post", "channel": "#standup", "text": "=🌅 *Daily Standup — {{ $now.toFormat('EEEE, MMM dd') }}*\n\nPlease reply with:\n1️⃣ What did you complete yesterday?\n2️⃣ What are you working on today?\n3️⃣ Any blockers?\n\nReply in thread or use /standup form. Collecting until 9:30 AM." }, "typeVersion": 2.2 },
+    { "id": "n3", "name": "Wait 30 Minutes", "type": "n8n-nodes-base.wait", "position": [660, 300], "parameters": { "amount": 30, "unit": "minutes" }, "typeVersion": 1.1 },
+    { "id": "n4", "name": "Fetch Submitted Standups", "type": "n8n-nodes-base.googleSheets", "position": [860, 300], "parameters": { "operation": "readRows", "documentId": "YOUR_STANDUP_SHEET_ID", "sheetName": "Responses" }, "typeVersion": 4.4 },
+    { "id": "n5", "name": "Filter Today Responses", "type": "n8n-nodes-base.code", "position": [1060, 300], "parameters": { "jsCode": "const today = new Date().toISOString().split('T')[0];\nconst rows = $input.all().map(i => i.json);\nconst todayRows = rows.filter(r => r['Date']?.startsWith(today));\nreturn [{ json: { responses: todayRows, count: todayRows.length, date: today } }];" }, "typeVersion": 2 },
+    { "id": "n6", "name": "Synthesize Team Digest", "type": "@n8n/n8n-nodes-langchain.chainLlm", "position": [1260, 300], "parameters": { "promptType": "define", "text": "=Create a team standup digest from these responses.\n\nDate: {{ $json.date }}\nResponses: {{ JSON.stringify($json.responses) }}\nTotal submitted: {{ $json.count }}\n\nReturn JSON:\n{\n  \"completed_yesterday\": [\"team-level summary of what was done\"],\n  \"working_on_today\": [\"team-level summary of today's work\"],\n  \"blockers\": [{\"person\": \"\", \"blocker\": \"\", \"needs_help_from\": \"\"}],\n  \"who_submitted\": [],\n  \"who_missed\": [],\n  \"team_focus_today\": \"one sentence of team's main focus\",\n  \"digest_message\": \"Slack message summarizing the standup\"\n}" }, "typeVersion": 1.5 },
+    { "id": "n7", "name": "OpenAI GPT-4o", "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi", "position": [1260, 460], "parameters": { "model": "gpt-4o", "options": {} }, "typeVersion": 1 },
+    { "id": "n8", "name": "Parse Digest", "type": "n8n-nodes-base.code", "position": [1460, 300], "parameters": { "jsCode": "const raw = $input.item.json.text.replace(/```json|```/g,'').trim();\nreturn [{ json: JSON.parse(raw) }];" }, "typeVersion": 2 },
+    { "id": "n9", "name": "Post Digest to Slack", "type": "n8n-nodes-base.slack", "position": [1660, 300], "parameters": { "operation": "post", "channel": "#standup", "text": "=📋 *Standup Digest — {{ $now.toFormat('MMM dd') }}*\n\n*Team Focus:* {{ $json.team_focus_today }}\n\n{{ $json.digest_message }}\n\n{{ $json.blockers.length > 0 ? '🚧 *Blockers:*\\n' + $json.blockers.map(b=>`• ${b.person}: ${b.blocker}`).join('\\n') : '✅ No blockers today' }}\n\n*Submitted:* {{ $json.who_submitted.join(', ') }}\n{{ $json.who_missed.length > 0 ? '*Missed:* ' + $json.who_missed.join(', ') : '' }}" }, "typeVersion": 2.2 },
+    { "id": "n10", "name": "Sticky Note", "type": "n8n-nodes-base.stickyNote", "position": [220, 140], "parameters": { "content": "## Async Standup Collector\n9:00 AM: Sends standup prompt to #standup Slack channel.\nWaits 30 minutes for team responses.\nTeam submits via Google Form → Sheet.\nGPT-4o synthesizes into team digest.\n9:30 AM: Posts digest with blockers, focus, who missed." }, "typeVersion": 1 }
+  ],
+  "connections": {
+    "Morning Standup Trigger": {"main": [[{"node": "Send Standup Form to Team", "type": "main", "index": 0}]]},
+    "Send Standup Form to Team": {"main": [[{"node": "Wait 30 Minutes", "type": "main", "index": 0}]]},
+    "Wait 30 Minutes": {"main": [[{"node": "Fetch Submitted Standups", "type": "main", "index": 0}]]},
+    "Fetch Submitted Standups": {"main": [[{"node": "Filter Today Responses", "type": "main", "index": 0}]]},
+    "Filter Today Responses": {"main": [[{"node": "Synthesize Team Digest", "type": "main", "index": 0}]]},
+    "Synthesize Team Digest": {"main": [[{"node": "Parse Digest", "type": "main", "index": 0}]]},
+    "OpenAI GPT-4o": {"ai_languageModel": [[{"node": "Synthesize Team Digest", "type": "ai_languageModel", "index": 0}]]},
+    "Parse Digest": {"main": [[{"node": "Post Digest to Slack", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"}
+}

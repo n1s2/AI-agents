@@ -1,0 +1,25 @@
+{
+  "name": "FLOOWBOX - Expense Report Automator",
+  "meta": { "instanceId": "navtej-floowbox-n8n-2025" },
+  "nodes": [
+    { "id": "n1", "name": "Monthly Expense Trigger", "type": "n8n-nodes-base.scheduleTrigger", "position": [240, 300], "parameters": { "rule": { "interval": [{"field": "months", "triggerAtDayOfMonth": 28, "triggerAtHour": 9}] } }, "typeVersion": 1.2 },
+    { "id": "n2", "name": "Fetch Expense Data", "type": "n8n-nodes-base.googleSheets", "position": [460, 300], "parameters": { "operation": "readRows", "documentId": "YOUR_EXPENSE_SHEET_ID", "sheetName": "Current Month" }, "typeVersion": 4.4 },
+    { "id": "n3", "name": "Process Expenses", "type": "n8n-nodes-base.code", "position": [680, 300], "parameters": { "jsCode": "const rows = $input.all().map(i => i.json);\nconst byCategory = {};\nlet total = 0;\nrows.forEach(r => {\n  const cat = r['Category'] || 'Other';\n  const amt = parseFloat(r['Amount'] || 0);\n  byCategory[cat] = (byCategory[cat] || 0) + amt;\n  total += amt;\n});\nconst breakdown = Object.entries(byCategory).sort((a,b)=>b[1]-a[1]).map(([cat,amt]) => ({ category: cat, amount: amt, percent: ((amt/total)*100).toFixed(1) }));\nreturn [{ json: { expenses: rows, breakdown, total: total.toFixed(2), month: new Date().toLocaleString('default',{month:'long',year:'numeric'}) } }];" }, "typeVersion": 2 },
+    { "id": "n4", "name": "Analyze and Narrate", "type": "@n8n/n8n-nodes-langchain.chainLlm", "position": [900, 300], "parameters": { "promptType": "define", "text": "=Analyze this month's business expenses and write a brief report.\n\nMonth: {{ $json.month }}\nTotal: ₹{{ $json.total }}\nBreakdown: {{ JSON.stringify($json.breakdown) }}\n\nReturn JSON:\n{\n  \"narrative\": \"2-3 sentence plain English summary\",\n  \"biggest_spend_category\": \"\",\n  \"unusual_expenses\": [],\n  \"cost_saving_suggestions\": [],\n  \"tax_deductible_estimate\": \"\"\n}" }, "typeVersion": 1.5 },
+    { "id": "n5", "name": "OpenAI GPT-4o", "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi", "position": [900, 460], "parameters": { "model": "gpt-4o", "options": {} }, "typeVersion": 1 },
+    { "id": "n6", "name": "Parse Report", "type": "n8n-nodes-base.code", "position": [1100, 300], "parameters": { "jsCode": "const raw = $input.item.json.text.replace(/```json|```/g,'').trim();\nreturn [{ json: { ...JSON.parse(raw), data: $('Process Expenses').item.json } }];" }, "typeVersion": 2 },
+    { "id": "n7", "name": "Send Email Report", "type": "n8n-nodes-base.emailSend", "position": [1300, 200], "parameters": { "toEmail": "navtej@floowbox.com", "fromEmail": "finance@floowbox.com", "subject": "=Expense Report — {{ $json.data.month }}", "html": "=<h2>{{ $json.data.month }} Expenses</h2><p>{{ $json.narrative }}</p><p><b>Total: ₹{{ $json.data.total }}</b></p><table border='1' cellpadding='8'><tr><th>Category</th><th>Amount</th><th>%</th></tr>{{ $json.data.breakdown.map(b=>`<tr><td>${b.category}</td><td>₹${b.amount}</td><td>${b.percent}%</td></tr>`).join('') }}</table><h3>Cost Saving Suggestions</h3><ul>{{ $json.cost_saving_suggestions.map(s=>`<li>${s}</li>`).join('') }}</ul>", "options": {} }, "typeVersion": 2.1 },
+    { "id": "n8", "name": "Log to Sheets", "type": "n8n-nodes-base.googleSheets", "position": [1300, 440], "parameters": { "operation": "appendOrUpdate", "documentId": "YOUR_EXPENSE_SHEET_ID", "sheetName": "Monthly Reports", "fieldsUi": { "fieldValues": [{"fieldId": "Month", "fieldValue": "={{ $json.data.month }}"}, {"fieldId": "Total", "fieldValue": "={{ $json.data.total }}"}, {"fieldId": "Biggest Category", "fieldValue": "={{ $json.biggest_spend_category }}"}, {"fieldId": "Summary", "fieldValue": "={{ $json.narrative }}"] } }, "typeVersion": 4.4 },
+    { "id": "n9", "name": "Sticky Note", "type": "n8n-nodes-base.stickyNote", "position": [220, 140], "parameters": { "content": "## Expense Report Automator\nRuns on 28th of every month.\nFetches expenses from Google Sheets.\nCalculates totals by category.\nGPT-4o writes narrative + cost saving suggestions.\nSends formatted email report + logs to history sheet." }, "typeVersion": 1 }
+  ],
+  "connections": {
+    "Monthly Expense Trigger": {"main": [[{"node": "Fetch Expense Data", "type": "main", "index": 0}]]},
+    "Fetch Expense Data": {"main": [[{"node": "Process Expenses", "type": "main", "index": 0}]]},
+    "Process Expenses": {"main": [[{"node": "Analyze and Narrate", "type": "main", "index": 0}]]},
+    "Analyze and Narrate": {"main": [[{"node": "Parse Report", "type": "main", "index": 0}]]},
+    "OpenAI GPT-4o": {"ai_languageModel": [[{"node": "Analyze and Narrate", "type": "ai_languageModel", "index": 0}]]},
+    "Parse Report": {"main": [[{"node": "Send Email Report", "type": "main", "index": 0}], [{"node": "Log to Sheets", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"}
+}

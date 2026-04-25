@@ -1,0 +1,25 @@
+{
+  "name": "FLOOWBOX - AI Meeting Scheduler Agent",
+  "meta": { "instanceId": "navtej-floowbox-n8n-2025" },
+  "nodes": [
+    { "id": "n1", "name": "Schedule Request Webhook", "type": "n8n-nodes-base.webhook", "position": [240, 300], "parameters": { "path": "schedule-meeting", "httpMethod": "POST", "responseMode": "responseNode" }, "typeVersion": 2 },
+    { "id": "n2", "name": "Extract Request", "type": "n8n-nodes-base.set", "position": [460, 300], "parameters": { "assignments": { "assignments": [ {"id":"ms1","name":"requester_name","type":"string","value":"={{ $json.name }}"}, {"id":"ms2","name":"requester_email","type":"string","value":"={{ $json.email }}"}, {"id":"ms3","name":"meeting_purpose","type":"string","value":"={{ $json.purpose }}"}, {"id":"ms4","name":"duration_minutes","type":"number","value":"={{ $json.duration || 30 }}"}, {"id":"ms5","name":"preferred_times","type":"string","value":"={{ $json.preferred_times || 'weekdays 10am-6pm IST' }}"} ] } }, "typeVersion": 3.4 },
+    { "id": "n3", "name": "Parse Scheduling Intent", "type": "@n8n/n8n-nodes-langchain.chainLlm", "position": [680, 300], "parameters": { "promptType": "define", "text": "=Parse this meeting scheduling request and suggest optimal slots.\n\nRequester: {{ $json.requester_name }}\nPurpose: {{ $json.meeting_purpose }}\nDuration: {{ $json.duration_minutes }} minutes\nPreferred times: {{ $json.preferred_times }}\nCurrent date/time: {{ $now.toISO() }}\n\nReturn JSON:\n{\n  \"meeting_type\": \"discovery/demo/followup/consultation/internal\",\n  \"urgency\": \"asap/this_week/flexible\",\n  \"suggested_slots\": [\n    {\"date\": \"YYYY-MM-DD\", \"time\": \"HH:MM IST\", \"day\": \"Monday\"},\n    {\"date\": \"YYYY-MM-DD\", \"time\": \"HH:MM IST\", \"day\": \"Tuesday\"},\n    {\"date\": \"YYYY-MM-DD\", \"time\": \"HH:MM IST\", \"day\": \"Wednesday\"}\n  ],\n  \"meeting_agenda\": [\"agenda item 1\", \"agenda item 2\"],\n  \"prep_needed\": \"what to prepare before this meeting\",\n  \"booking_email\": \"friendly email to send requester with slot options\"\n}" }, "typeVersion": 1.5 },
+    { "id": "n4", "name": "OpenAI GPT-4o", "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi", "position": [680, 460], "parameters": { "model": "gpt-4o", "options": {} }, "typeVersion": 1 },
+    { "id": "n5", "name": "Parse Schedule", "type": "n8n-nodes-base.code", "position": [900, 300], "parameters": { "jsCode": "const raw = $input.item.json.text.replace(/```json|```/g,'').trim();\nreturn [{ json: { ...JSON.parse(raw), request: $('Extract Request').item.json } }];" }, "typeVersion": 2 },
+    { "id": "n6", "name": "Send Slot Options Email", "type": "n8n-nodes-base.emailSend", "position": [1100, 200], "parameters": { "toEmail": "={{ $json.request.requester_email }}", "fromEmail": "navtej@floowbox.com", "subject": "=Meeting request received — pick your slot", "html": "=<p>Hi {{ $json.request.requester_name }},</p><p>{{ $json.booking_email.replace(/\\n/g,'<br>') }}</p><p><b>Available slots:</b></p><ul>{{ $json.suggested_slots.map(s=>`<li>${s.day} ${s.date} at ${s.time}</li>`).join('') }}</ul><p>Reply with your preferred slot and I'll confirm.</p>", "options": {} }, "typeVersion": 2.1 },
+    { "id": "n7", "name": "Notify in Slack", "type": "n8n-nodes-base.slack", "position": [1100, 420], "parameters": { "operation": "post", "channel": "#calendar", "text": "=📅 *Meeting Request — {{ $json.request.meeting_purpose }}*\n*From:* {{ $json.request.requester_name }}\n*Type:* {{ $json.meeting_type }} | *Urgency:* {{ $json.urgency }}\n*Duration:* {{ $json.request.duration_minutes }}min\n\n*Suggested slots sent.*\n*Prep needed:* {{ $json.prep_needed }}" }, "typeVersion": 2.2 },
+    { "id": "n8", "name": "Respond OK", "type": "n8n-nodes-base.respondToWebhook", "position": [1300, 300], "parameters": { "respondWith": "json", "responseBody": "={{ JSON.stringify({ status: 'slots_sent', slots: $json.suggested_slots }) }}" }, "typeVersion": 1.1 },
+    { "id": "n9", "name": "Sticky Note", "type": "n8n-nodes-base.stickyNote", "position": [220, 140], "parameters": { "content": "## AI Meeting Scheduler\nIncoming request → GPT-4o classifies meeting type and urgency.\nGenerates 3 optimal time slots + meeting agenda.\nSends slot options email to requester.\nNotifies owner on Slack with prep notes." }, "typeVersion": 1 }
+  ],
+  "connections": {
+    "Schedule Request Webhook": {"main": [[{"node": "Extract Request", "type": "main", "index": 0}]]},
+    "Extract Request": {"main": [[{"node": "Parse Scheduling Intent", "type": "main", "index": 0}]]},
+    "Parse Scheduling Intent": {"main": [[{"node": "Parse Schedule", "type": "main", "index": 0}]]},
+    "OpenAI GPT-4o": {"ai_languageModel": [[{"node": "Parse Scheduling Intent", "type": "ai_languageModel", "index": 0}]]},
+    "Parse Schedule": {"main": [[{"node": "Send Slot Options Email", "type": "main", "index": 0}], [{"node": "Notify in Slack", "type": "main", "index": 0}]]},
+    "Send Slot Options Email": {"main": [[{"node": "Respond OK", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"}
+}
