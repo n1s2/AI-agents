@@ -1,0 +1,25 @@
+{
+  "name": "FLOOWBOX - AI Email Triage Agent",
+  "meta": { "instanceId": "navtej-floowbox-n8n-2025" },
+  "nodes": [
+    { "id": "n1", "name": "New Email Trigger", "type": "n8n-nodes-base.emailReadImap", "position": [240, 300], "parameters": { "mailbox": "INBOX", "format": "simple", "options": {} }, "typeVersion": 2 },
+    { "id": "n2", "name": "Extract Email Data", "type": "n8n-nodes-base.set", "position": [460, 300], "parameters": { "assignments": { "assignments": [ {"id":"et1","name":"from","type":"string","value":"={{ $json.from?.value?.[0]?.address || $json.from }}"}, {"id":"et2","name":"subject","type":"string","value":"={{ $json.subject }}"}, {"id":"et3","name":"body","type":"string","value":"={{ $json.text?.substring(0, 2000) || $json.textHtml?.replace(/<[^>]+>/g,'').substring(0,2000) }}"}, {"id":"et4","name":"date","type":"string","value":"={{ $json.date }}"} ] } }, "typeVersion": 3.4 },
+    { "id": "n3", "name": "Triage Email", "type": "@n8n/n8n-nodes-langchain.chainLlm", "position": [680, 300], "parameters": { "promptType": "define", "text": "=Triage this email for a busy founder.\n\nFrom: {{ $json.from }}\nSubject: {{ $json.subject }}\nBody: {{ $json.body }}\n\nReturn JSON:\n{\n  \"category\": \"client/prospect/vendor/newsletter/spam/personal/admin/urgent\",\n  \"priority\": \"urgent/high/normal/low/archive\",\n  \"action_required\": true,\n  \"action_type\": \"reply/review/schedule/pay/sign/ignore\",\n  \"deadline\": \"today/this_week/no_deadline\",\n  \"draft_reply\": \"short draft reply if reply needed, else null\",\n  \"summary\": \"one sentence of what this email is actually about\",\n  \"label\": \"single label to apply\"\n}" }, "typeVersion": 1.5 },
+    { "id": "n4", "name": "OpenAI GPT-4o", "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi", "position": [680, 460], "parameters": { "model": "gpt-4o", "options": {} }, "typeVersion": 1 },
+    { "id": "n5", "name": "Parse Triage", "type": "n8n-nodes-base.code", "position": [900, 300], "parameters": { "jsCode": "const raw = $input.item.json.text.replace(/```json|```/g,'').trim();\nconst triage = JSON.parse(raw);\nreturn [{ json: { ...triage, email: $('Extract Email Data').item.json } }];" }, "typeVersion": 2 },
+    { "id": "n6", "name": "Route by Priority", "type": "n8n-nodes-base.switch", "position": [1100, 300], "parameters": { "dataType": "string", "value1": "={{ $json.priority }}", "rules": { "rules": [{"value2": "urgent", "output": 0}, {"value2": "high", "output": 1}, {"value2": "archive", "output": 2}] }, "fallbackOutput": 1 }, "typeVersion": 3 },
+    { "id": "n7", "name": "Urgent Slack Alert", "type": "n8n-nodes-base.slack", "position": [1300, 180], "parameters": { "operation": "post", "channel": "#inbox-urgent", "text": "=🚨 *URGENT EMAIL*\n*From:* {{ $json.email.from }}\n*Subject:* {{ $json.email.subject }}\n*Summary:* {{ $json.summary }}\n*Action:* {{ $json.action_type }} | *Deadline:* {{ $json.deadline }}\n\n*Draft reply:*\n{{ $json.draft_reply || 'No reply needed' }}" }, "typeVersion": 2.2 },
+    { "id": "n8", "name": "Log to Notion", "type": "n8n-nodes-base.notion", "position": [1300, 380], "parameters": { "resource": "page", "operation": "create", "databaseId": "YOUR_NOTION_DB_ID", "title": "={{ $json.email.subject }}", "propertiesUi": { "propertyValues": [{"key": "From", "textValue": "={{ $json.email.from }}"}, {"key": "Category", "selectValue": "={{ $json.category }}"}, {"key": "Priority", "selectValue": "={{ $json.priority }}"}, {"key": "Action", "textValue": "={{ $json.action_type }}"}, {"key": "Summary", "textValue": "={{ $json.summary }}"] } }, "typeVersion": 2.2 },
+    { "id": "n9", "name": "Sticky Note", "type": "n8n-nodes-base.stickyNote", "position": [220, 140], "parameters": { "content": "## AI Email Triage Agent\nMonitors INBOX via IMAP.\nEvery email: GPT-4o classifies category, priority, action type.\nUrgent emails → immediate Slack alert with draft reply.\nAll others → logged to Notion inbox tracker.\n\nSaves 30+ minutes of inbox sorting per day." }, "typeVersion": 1 }
+  ],
+  "connections": {
+    "New Email Trigger": {"main": [[{"node": "Extract Email Data", "type": "main", "index": 0}]]},
+    "Extract Email Data": {"main": [[{"node": "Triage Email", "type": "main", "index": 0}]]},
+    "Triage Email": {"main": [[{"node": "Parse Triage", "type": "main", "index": 0}]]},
+    "OpenAI GPT-4o": {"ai_languageModel": [[{"node": "Triage Email", "type": "ai_languageModel", "index": 0}]]},
+    "Parse Triage": {"main": [[{"node": "Route by Priority", "type": "main", "index": 0}], [{"node": "Log to Notion", "type": "main", "index": 0}]]},
+    "Route by Priority": {"main": [[{"node": "Urgent Slack Alert", "type": "main", "index": 0}], [{"node": "Log to Notion", "type": "main", "index": 0}], []]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"}
+}

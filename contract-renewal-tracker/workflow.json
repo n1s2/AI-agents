@@ -1,0 +1,26 @@
+{
+  "name": "FLOOWBOX - Contract Renewal Tracker",
+  "meta": { "instanceId": "navtej-floowbox-n8n-2025" },
+  "nodes": [
+    { "id": "n1", "name": "Daily Renewal Check", "type": "n8n-nodes-base.scheduleTrigger", "position": [240, 300], "parameters": { "rule": { "interval": [{"field": "days", "triggerAtHour": 8}] } }, "typeVersion": 1.2 },
+    { "id": "n2", "name": "Fetch All Contracts", "type": "n8n-nodes-base.airtable", "position": [460, 300], "parameters": { "operation": "search", "baseId": "YOUR_AIRTABLE_BASE_ID", "tableId": "Contracts", "filterByFormula": "{Status} = 'Active'" }, "typeVersion": 2.1 },
+    { "id": "n3", "name": "Check Due Dates", "type": "n8n-nodes-base.code", "position": [680, 300], "parameters": { "jsCode": "const contracts = $input.all().map(i => i.json.fields);\nconst today = new Date();\nconst urgent = [];\nconst upcoming = [];\ncontracts.forEach(c => {\n  const renewal = new Date(c['Renewal Date']);\n  const daysLeft = Math.ceil((renewal - today) / (1000*60*60*24));\n  const entry = { ...c, days_left: daysLeft };\n  if (daysLeft <= 7) urgent.push(entry);\n  else if (daysLeft <= 30) upcoming.push(entry);\n});\nreturn [{ json: { urgent, upcoming, total_active: contracts.length } }];" }, "typeVersion": 2 },
+    { "id": "n4", "name": "Any Renewals?", "type": "n8n-nodes-base.if", "position": [900, 300], "parameters": { "conditions": { "conditions": [{"leftValue": "={{ $json.urgent.length + $json.upcoming.length }}", "rightValue": 0, "operator": {"type": "number", "operation": "gt"}}] } }, "typeVersion": 2.2 },
+    { "id": "n5", "name": "Draft Renewal Actions", "type": "@n8n/n8n-nodes-langchain.chainLlm", "position": [1100, 200], "parameters": { "promptType": "define", "text": "=Review these contracts needing renewal attention and recommend actions.\n\nURGENT (≤7 days): {{ JSON.stringify($json.urgent) }}\nUPCOMING (≤30 days): {{ JSON.stringify($json.upcoming) }}\n\nFor each contract return a recommended action and draft communication.\n\nReturn JSON:\n{\n  \"urgent_actions\": [{\"contract\": \"\", \"party\": \"\", \"days_left\": 0, \"action\": \"\", \"draft_email\": \"\"}],\n  \"upcoming_actions\": [{\"contract\": \"\", \"party\": \"\", \"days_left\": 0, \"action\": \"\"}],\n  \"summary\": \"one sentence summary\"\n}" }, "typeVersion": 1.5 },
+    { "id": "n6", "name": "OpenAI GPT-4o", "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi", "position": [1100, 380], "parameters": { "model": "gpt-4o", "options": {} }, "typeVersion": 1 },
+    { "id": "n7", "name": "Parse Actions", "type": "n8n-nodes-base.code", "position": [1300, 200], "parameters": { "jsCode": "const raw = $input.item.json.text.replace(/```json|```/g,'').trim();\nreturn [{ json: JSON.parse(raw) }];" }, "typeVersion": 2 },
+    { "id": "n8", "name": "Slack Renewal Alert", "type": "n8n-nodes-base.slack", "position": [1500, 200], "parameters": { "operation": "post", "channel": "#contracts", "text": "=📋 *Contract Renewal Alert — {{ $now.toFormat('MMM dd') }}*\n\n{{ $json.summary }}\n\n{{ $json.urgent_actions.length > 0 ? '🚨 *URGENT (≤7 days):*\\n' + $json.urgent_actions.map(a=>`• ${a.contract} with ${a.party}: ${a.days_left} days — ${a.action}`).join('\\n') : '' }}\n\n{{ $json.upcoming_actions.length > 0 ? '📅 *Upcoming (≤30 days):*\\n' + $json.upcoming_actions.map(a=>`• ${a.contract} with ${a.party}: ${a.days_left} days`).join('\\n') : '' }}" }, "typeVersion": 2.2 },
+    { "id": "n9", "name": "Sticky Note", "type": "n8n-nodes-base.stickyNote", "position": [220, 140], "parameters": { "content": "## Contract Renewal Tracker\nRuns daily at 8 AM.\nFetches all active contracts from Airtable.\nFlags: ≤7 days = URGENT, ≤30 days = upcoming.\nGPT-4o recommends specific actions + drafts renewal emails.\nSlack alert only when renewals need attention.\nSilent pass on normal days." }, "typeVersion": 1 }
+  ],
+  "connections": {
+    "Daily Renewal Check": {"main": [[{"node": "Fetch All Contracts", "type": "main", "index": 0}]]},
+    "Fetch All Contracts": {"main": [[{"node": "Check Due Dates", "type": "main", "index": 0}]]},
+    "Check Due Dates": {"main": [[{"node": "Any Renewals?", "type": "main", "index": 0}]]},
+    "Any Renewals?": {"main": [[{"node": "Draft Renewal Actions", "type": "main", "index": 0}], []]},
+    "Draft Renewal Actions": {"main": [[{"node": "Parse Actions", "type": "main", "index": 0}]]},
+    "OpenAI GPT-4o": {"ai_languageModel": [[{"node": "Draft Renewal Actions", "type": "ai_languageModel", "index": 0}]]},
+    "Parse Actions": {"main": [[{"node": "Slack Renewal Alert", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"}
+}
