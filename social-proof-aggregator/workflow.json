@@ -1,0 +1,25 @@
+{
+  "name": "FLOOWBOX - Social Proof Aggregator",
+  "meta": { "instanceId": "navtej-floowbox-n8n-2025" },
+  "nodes": [
+    { "id": "n1", "name": "Weekly Proof Scan", "type": "n8n-nodes-base.scheduleTrigger", "position": [240, 300], "parameters": { "rule": { "interval": [{"field": "weeks", "triggerAtDay": [1], "triggerAtHour": 8}] } }, "typeVersion": 1.2 },
+    { "id": "n2", "name": "Fetch New Reviews G2", "type": "n8n-nodes-base.httpRequest", "position": [460, 180], "parameters": { "method": "POST", "url": "https://api.perplexity.ai/chat/completions", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendBody": true, "specifyBody": "json", "jsonBody": "{\n  \"model\": \"sonar\",\n  \"messages\": [{\"role\": \"user\", \"content\": \"Find any new reviews of FLOOWBOX or similar n8n automation services on G2, Capterra, Trustpilot, or ProductHunt from the last 7 days. Include the review text and star rating.\"}],\n  \"search_recency_filter\": \"week\"\n}" }, "typeVersion": 4.2 },
+    { "id": "n3", "name": "Fetch Testimonials Sheet", "type": "n8n-nodes-base.googleSheets", "position": [460, 380], "parameters": { "operation": "readRows", "documentId": "YOUR_TESTIMONIALS_SHEET_ID", "sheetName": "Raw Testimonials" }, "typeVersion": 4.4 },
+    { "id": "n4", "name": "Process and Polish Testimonials", "type": "@n8n/n8n-nodes-langchain.chainLlm", "position": [720, 300], "parameters": { "promptType": "define", "text": "=Process these testimonials and reviews for use in marketing.\n\nReviews found online:\n{{ $('Fetch New Reviews G2').item.json.choices[0].message.content }}\n\nRaw testimonials from sheet:\n{{ JSON.stringify($('Fetch Testimonials Sheet').all().slice(-10).map(i=>i.json)) }}\n\nFor each usable testimonial:\n1. Extract the core quote (clean up grammar if needed, keep meaning intact)\n2. Identify the use case it proves\n3. Suggest where to use it (landing page/case study/ad/LinkedIn)\n\nReturn JSON:\n{\n  \"testimonials\": [{\n    \"original\": \"\",\n    \"polished_quote\": \"\",\n    \"customer\": \"\",\n    \"use_case_proven\": \"\",\n    \"best_used_on\": \"\",\n    \"star_rating\": 0\n  }],\n  \"top_quote\": \"single best quote for homepage\",\n  \"themes\": [\"what customers consistently praise\"],\n  \"gaps\": [\"what use cases have no testimonials yet\"]\n}" }, "typeVersion": 1.5 },
+    { "id": "n5", "name": "OpenAI GPT-4o", "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi", "position": [720, 460], "parameters": { "model": "gpt-4o", "options": {} }, "typeVersion": 1 },
+    { "id": "n6", "name": "Parse Proof", "type": "n8n-nodes-base.code", "position": [940, 300], "parameters": { "jsCode": "const raw = $input.item.json.text.replace(/```json|```/g,'').trim();\nreturn [{ json: JSON.parse(raw) }];" }, "typeVersion": 2 },
+    { "id": "n7", "name": "Save to Notion Library", "type": "n8n-nodes-base.notion", "position": [1140, 200], "parameters": { "resource": "page", "operation": "create", "databaseId": "YOUR_NOTION_DB_ID", "title": "=Social Proof Update — {{ $now.toFormat('MMM dd yyyy') }}", "propertiesUi": { "propertyValues": [{"key": "Count", "numberValue": "={{ $json.testimonials.length }}"}, {"key": "Top Quote", "textValue": "={{ $json.top_quote }}"] } }, "typeVersion": 2.2 },
+    { "id": "n8", "name": "Weekly Proof Slack", "type": "n8n-nodes-base.slack", "position": [1140, 440], "parameters": { "operation": "post", "channel": "#marketing", "text": "=⭐ *Social Proof Weekly Update*\n\n*{{ $json.testimonials.length }} usable testimonials this week*\n\n*Top Quote:*\n\"{{ $json.top_quote }}\"\n\n*Customers consistently praise:*\n{{ $json.themes.map(t=>`• ${t}`).join('\\n') }}\n\n*Missing testimonials for:*\n{{ $json.gaps.map(g=>`• ${g}`).join('\\n') }}" }, "typeVersion": 2.2 },
+    { "id": "n9", "name": "Sticky Note", "type": "n8n-nodes-base.stickyNote", "position": [220, 140], "parameters": { "content": "## Social Proof Aggregator\nRuns weekly Monday 8 AM.\nSearches G2/Capterra/Trustpilot for new reviews.\nFetches raw testimonials from Google Sheets.\nGPT-4o polishes quotes and maps to use cases.\nIdentifies gaps — which benefits have no proof yet.\nSaves to Notion library + Slack digest." }, "typeVersion": 1 }
+  ],
+  "connections": {
+    "Weekly Proof Scan": {"main": [[{"node": "Fetch New Reviews G2", "type": "main", "index": 0}], [{"node": "Fetch Testimonials Sheet", "type": "main", "index": 0}]]},
+    "Fetch New Reviews G2": {"main": [[{"node": "Process and Polish Testimonials", "type": "main", "index": 0}]]},
+    "Fetch Testimonials Sheet": {"main": [[{"node": "Process and Polish Testimonials", "type": "main", "index": 0}]]},
+    "Process and Polish Testimonials": {"main": [[{"node": "Parse Proof", "type": "main", "index": 0}]]},
+    "OpenAI GPT-4o": {"ai_languageModel": [[{"node": "Process and Polish Testimonials", "type": "ai_languageModel", "index": 0}]]},
+    "Parse Proof": {"main": [[{"node": "Save to Notion Library", "type": "main", "index": 0}], [{"node": "Weekly Proof Slack", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"}
+}
