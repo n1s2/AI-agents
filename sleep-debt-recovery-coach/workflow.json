@@ -1,0 +1,240 @@
+{
+  "name": "Sleep Debt Recovery Coach",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 24,
+              "triggerAtHour": 7
+            }
+          ]
+        }
+      },
+      "id": "a1b2c3d4-0001",
+      "name": "Daily Morning Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{$env.OURA_API_BASE}}/v2/usercollection/sleep",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{$env.OURA_ACCESS_TOKEN}}"
+            }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "start_date",
+              "value": "={{ $now.minus({days: 7}).toFormat('yyyy-MM-dd') }}"
+            },
+            {
+              "name": "end_date",
+              "value": "={{ $now.toFormat('yyyy-MM-dd') }}"
+            }
+          ]
+        }
+      },
+      "id": "a1b2c3d4-0002",
+      "name": "Fetch Oura Sleep Data",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const sleepData = $input.first().json.data;\n\nif (!sleepData || sleepData.length === 0) {\n  return [{ json: { error: 'No sleep data found', skip: true } }];\n}\n\n// recommended sleep per night in seconds (8 hours)\nconst RECOMMENDED_SLEEP_SECONDS = 8 * 3600;\n\nlet totalDebt = 0;\nlet dailyBreakdown = [];\nlet worstNight = null;\nlet bestNight = null;\n\nfor (const night of sleepData) {\n  const totalSleep = night.total_sleep_duration || 0;\n  const efficiency = night.efficiency || 0;\n  const remSleep = night.rem_sleep_duration || 0;\n  const deepSleep = night.deep_sleep_duration || 0;\n  const date = night.day;\n\n  const deficit = RECOMMENDED_SLEEP_SECONDS - totalSleep;\n  totalDebt += deficit > 0 ? deficit : 0;\n\n  const entry = {\n    date,\n    totalSleepHours: (totalSleep / 3600).toFixed(2),\n    efficiency,\n    remHours: (remSleep / 3600).toFixed(2),\n    deepHours: (deepSleep / 3600).toFixed(2),\n    deficitHours: (deficit / 3600).toFixed(2),\n    score: night.score || null\n  };\n\n  dailyBreakdown.push(entry);\n\n  if (!worstNight || totalSleep < worstNight.totalSleep) {\n    worstNight = { ...entry, totalSleep };\n  }\n  if (!bestNight || totalSleep > bestNight.totalSleep) {\n    bestNight = { ...entry, totalSleep };\n  }\n}\n\nconst avgSleepHours = dailyBreakdown.reduce((s, d) => s + parseFloat(d.totalSleepHours), 0) / dailyBreakdown.length;\nconst totalDebtHours = (totalDebt / 3600).toFixed(1);\n\nreturn [{\n  json: {\n    summary: {\n      totalDebtHours,\n      avgSleepHours: avgSleepHours.toFixed(2),\n      daysAnalyzed: dailyBreakdown.length,\n      worstNight,\n      bestNight\n    },\n    dailyBreakdown,\n    analysisDate: $now.toISO()\n  }\n}];"
+      },
+      "id": "a1b2c3d4-0003",
+      "name": "Calculate Sleep Debt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-skip",
+              "leftValue": "={{ $json.error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0004",
+      "name": "Has Data?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-5",
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 1200
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are a compassionate but honest sleep health coach. Your role is to analyze real sleep tracking data, identify patterns, explain the health implications of sleep debt in plain English, and give a personalized — but realistic — 3-day recovery plan.\n\nBe warm and conversational. Don't use bullet points excessively. Write like a knowledgeable friend, not a clinical report. Keep the total response under 350 words.",
+              "role": "system"
+            },
+            {
+              "content": "Here's my sleep data from the last 7 days:\n\nSummary:\n- Total sleep debt accumulated: {{ $json.summary.totalDebtHours }} hours\n- Average nightly sleep: {{ $json.summary.avgSleepHours }} hours\n- Worst night: {{ $json.summary.worstNight.date }} with only {{ $json.summary.worstNight.totalSleepHours }}h\n- Best night: {{ $json.summary.bestNight.date }} with {{ $json.summary.bestNight.totalSleepHours }}h\n\nDaily breakdown:\n{{ $json.dailyBreakdown.map(d => `${d.date}: ${d.totalSleepHours}h sleep, ${d.efficiency}% efficiency, score: ${d.score ?? 'N/A'}`).join('\\n') }}\n\nPlease give me:\n1. A brief interpretation of what this pattern suggests about my sleep habits\n2. The most important thing I should fix first\n3. A practical 3-day plan to start recovering (not dramatic changes, just small steps)\n4. One habit I should keep doing because it seems to be working",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "a1b2c3d4-0005",
+      "name": "Claude Sleep Coach",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [1120, 220]
+    },
+    {
+      "parameters": {
+        "jsCode": "const coaching = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nconst sleepNode = $('Calculate Sleep Debt').first().json;\n\nconst debtHours = parseFloat(sleepNode.summary.totalDebtHours);\nlet urgencyEmoji = '🟢';\nif (debtHours > 10) urgencyEmoji = '🔴';\nelse if (debtHours > 5) urgencyEmoji = '🟡';\n\nconst subject = `${urgencyEmoji} Your Sleep Report — ${debtHours}h debt this week`;\n\nconst htmlBody = `\n<!DOCTYPE html>\n<html>\n<head>\n  <style>\n    body { font-family: Georgia, serif; color: #1a1a1a; background: #fafaf8; max-width: 620px; margin: 0 auto; padding: 24px; }\n    .header { border-bottom: 2px solid #e8e0d5; padding-bottom: 16px; margin-bottom: 24px; }\n    h1 { font-size: 22px; color: #2c2c2c; margin: 0 0 4px 0; }\n    .subtitle { color: #777; font-size: 14px; }\n    .stat-row { display: flex; gap: 16px; margin: 20px 0; }\n    .stat { background: #fff; border: 1px solid #e5e0d8; border-radius: 8px; padding: 14px 18px; flex: 1; }\n    .stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #999; }\n    .stat-value { font-size: 26px; font-weight: bold; color: #2c2c2c; margin-top: 4px; }\n    .coaching { background: #fff; border-left: 3px solid #c9a96e; padding: 20px 24px; border-radius: 0 8px 8px 0; line-height: 1.7; font-size: 15px; white-space: pre-wrap; }\n    .footer { margin-top: 28px; font-size: 12px; color: #aaa; border-top: 1px solid #eee; padding-top: 12px; }\n  </style>\n</head>\n<body>\n  <div class=\"header\">\n    <h1>🛌 Sleep Debt Recovery Coach</h1>\n    <div class=\"subtitle\">Weekly analysis · ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</div>\n  </div>\n\n  <div class=\"stat-row\">\n    <div class=\"stat\">\n      <div class=\"stat-label\">Sleep Debt</div>\n      <div class=\"stat-value\">${debtHours}h</div>\n    </div>\n    <div class=\"stat\">\n      <div class=\"stat-label\">Avg / Night</div>\n      <div class=\"stat-value\">${sleepNode.summary.avgSleepHours}h</div>\n    </div>\n    <div class=\"stat\">\n      <div class=\"stat-label\">Days Tracked</div>\n      <div class=\"stat-value\">${sleepNode.summary.daysAnalyzed}</div>\n    </div>\n  </div>\n\n  <div class=\"coaching\">${coaching}</div>\n\n  <div class=\"footer\">Powered by Oura Ring + Claude AI · This is informational, not medical advice.</div>\n</body>\n</html>`;\n\nreturn [{ json: { subject, htmlBody, debtHours, coaching } }];"
+      },
+      "id": "a1b2c3d4-0006",
+      "name": "Format Email Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 220]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$env.USER_EMAIL}}",
+        "subject": "={{$json.subject}}",
+        "emailType": "html",
+        "message": "={{$json.htmlBody}}"
+      },
+      "id": "a1b2c3d4-0007",
+      "name": "Send Email Report",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1560, 220],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-severe",
+              "leftValue": "={{ $('Format Email Report').first().json.debtHours }}",
+              "rightValue": 10,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "a1b2c3d4-0008",
+      "name": "Severe Debt?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1560, 420]
+    },
+    {
+      "parameters": {
+        "channel": "={{$env.SLACK_CHANNEL}}",
+        "text": "⚠️ *Sleep Debt Alert* — you've accumulated *{{ $('Format Email Report').first().json.debtHours }} hours* of sleep debt this week. Your recovery plan is in your inbox. Take it seriously tonight.",
+        "otherOptions": {}
+      },
+      "id": "a1b2c3d4-0009",
+      "name": "Slack Urgent Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1780, 360],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-creds-01",
+          "name": "Slack Account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily Morning Trigger": {
+      "main": [[{ "node": "Fetch Oura Sleep Data", "type": "main", "index": 0 }]]
+    },
+    "Fetch Oura Sleep Data": {
+      "main": [[{ "node": "Calculate Sleep Debt", "type": "main", "index": 0 }]]
+    },
+    "Calculate Sleep Debt": {
+      "main": [[{ "node": "Has Data?", "type": "main", "index": 0 }]]
+    },
+    "Has Data?": {
+      "main": [
+        [],
+        [{ "node": "Claude Sleep Coach", "type": "main", "index": 0 }]
+      ]
+    },
+    "Claude Sleep Coach": {
+      "main": [[{ "node": "Format Email Report", "type": "main", "index": 0 }]]
+    },
+    "Format Email Report": {
+      "main": [
+        [
+          { "node": "Send Email Report", "type": "main", "index": 0 },
+          { "node": "Severe Debt?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Severe Debt?": {
+      "main": [
+        [{ "node": "Slack Urgent Alert", "type": "main", "index": 0 }],
+        []
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "tags": ["health", "sleep", "ai-coaching", "oura"],
+  "triggerCount": 1,
+  "updatedAt": "2025-04-20T09:15:00.000Z",
+  "versionId": "v1.0.2"
+}

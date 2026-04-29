@@ -1,0 +1,267 @@
+{
+  "name": "Local Event Newsletter Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "weeksInterval": 1,
+              "triggerAtDay": [5],
+              "triggerAtHour": 8
+            }
+          ]
+        }
+      },
+      "id": "b5e9f1a2-0001",
+      "name": "Every Friday 8am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [200, 320]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://www.eventbriteapi.com/v3/events/search/",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{$env.EVENTBRITE_API_KEY}}"
+            }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "location.address",
+              "value": "={{$env.CITY_NAME}}"
+            },
+            {
+              "name": "location.within",
+              "value": "={{$env.RADIUS_KM}}km"
+            },
+            {
+              "name": "start_date.range_start",
+              "value": "={{ $now.toFormat(\"yyyy-MM-dd\") }}T00:00:00"
+            },
+            {
+              "name": "start_date.range_end",
+              "value": "={{ $now.plus({days: 7}).toFormat(\"yyyy-MM-dd\") }}T23:59:59"
+            },
+            {
+              "name": "expand",
+              "value": "venue,category"
+            },
+            {
+              "name": "page_size",
+              "value": "50"
+            }
+          ]
+        }
+      },
+      "id": "b5e9f1a2-0002",
+      "name": "Fetch Eventbrite Events",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [420, 240]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.meetup.com/find/upcoming_events",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "lon",
+              "value": "={{$env.CITY_LON}}"
+            },
+            {
+              "name": "lat",
+              "value": "={{$env.CITY_LAT}}"
+            },
+            {
+              "name": "radius",
+              "value": "={{$env.RADIUS_KM}}"
+            },
+            {
+              "name": "page",
+              "value": "40"
+            },
+            {
+              "name": "key",
+              "value": "={{$env.MEETUP_API_KEY}}"
+            }
+          ]
+        }
+      },
+      "id": "b5e9f1a2-0003",
+      "name": "Fetch Meetup Events",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [420, 420]
+    },
+    {
+      "parameters": {
+        "jsCode": "const eventbriteRaw = $('Fetch Eventbrite Events').first().json.events || [];\nconst meetupRaw = $('Fetch Meetup Events').first().json.events || [];\n\nconst categories = ($env.INTEREST_CATEGORIES || 'music,tech,food,art,outdoor').split(',').map(c => c.trim().toLowerCase());\n\nfunction normalizeEventbrite(e) {\n  const name = e.name?.text || '';\n  const desc = e.description?.text || '';\n  const cat = (e.category?.short_name || '').toLowerCase();\n  const venueName = e.venue?.name || '';\n  const venueAddress = e.venue?.address?.localized_address_display || '';\n  const startDate = e.start?.local || '';\n  const isFree = e.is_free || false;\n  const url = e.url || '';\n  return { source: 'eventbrite', name, desc, cat, venueName, venueAddress, startDate, isFree, url };\n}\n\nfunction normalizeMeetup(e) {\n  const name = e.name || '';\n  const desc = (e.description || '').replace(/<[^>]+>/g, '').slice(0, 300);\n  const cat = (e.group?.category?.shortname || '').toLowerCase();\n  const venueName = e.venue?.name || 'Online / TBD';\n  const venueAddress = e.venue ? `${e.venue.address_1 || ''}, ${e.venue.city || ''}` : '';\n  const startDate = e.local_date ? `${e.local_date}T${e.local_time || '00:00'}` : '';\n  const isFree = e.fee == null || e.fee.amount === 0;\n  const url = e.link || '';\n  return { source: 'meetup', name, desc, cat, venueName, venueAddress, startDate, isFree, url };\n}\n\nconst allEvents = [\n  ...eventbriteRaw.map(normalizeEventbrite),\n  ...meetupRaw.map(normalizeMeetup)\n];\n\n// Filter to relevant categories\nconst filtered = allEvents.filter(e => {\n  const text = (e.name + ' ' + e.desc + ' ' + e.cat).toLowerCase();\n  return categories.some(c => text.includes(c));\n});\n\n// Sort by date\nfiltered.sort((a, b) => new Date(a.startDate) - new Date(b.startDate));\n\n// Deduplicate by similar name (simple)\nconst seen = new Set();\nconst deduped = filtered.filter(e => {\n  const key = e.name.toLowerCase().slice(0, 40);\n  if (seen.has(key)) return false;\n  seen.add(key);\n  return true;\n});\n\nreturn [{ json: { events: deduped.slice(0, 30), total: deduped.length, city: $env.CITY_NAME } }];"
+      },
+      "id": "b5e9f1a2-0004",
+      "name": "Merge & Filter Events",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 320]
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-5",
+        "options": {
+          "temperature": 0.75,
+          "maxTokens": 2000
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are the editor of a friendly, opinionated weekly local events newsletter. Your city is {{ $json.city }}. You write like a real person who actually lives there — you have opinions, you get excited about good events, you gently warn people about ones that look sketchy or overpriced.\n\nYour newsletter has three sections:\n1. **This Week's Picks** (3-5 events you'd actually go to, with a sentence or two about why)\n2. **Also Worth Knowing** (a quick list of other solid events, just name + date + one line)\n3. **Skip This** (1-2 events that look underwhelming or not worth the hassle — be gently funny, not mean)\n\nDon't use generic filler phrases like 'join us for an unforgettable experience'. Write like you're telling a friend. Format the output in clean markdown.",
+              "role": "system"
+            },
+            {
+              "content": "Here are the events happening in {{ $json.city }} this week:\n\n{{ $json.events.map((e, i) => `${i+1}. **${e.name}**\\n   When: ${e.startDate}\\n   Where: ${e.venueName}${e.venueAddress ? ' — '+e.venueAddress : ''}\\n   Free: ${e.isFree ? 'Yes' : 'No'}\\n   Source: ${e.source}\\n   URL: ${e.url}\\n   Description: ${e.desc.slice(0, 200)}`).join('\\n\\n') }}\n\nWrite this week's newsletter based on these. Be selective and real about it.",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "b5e9f1a2-0005",
+      "name": "Claude Newsletter Editor",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [900, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const newsletterMd = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nconst eventsData = $('Merge & Filter Events').first().json;\n\n// Convert basic markdown to HTML\nfunction mdToHtml(md) {\n  return md\n    .replace(/^### (.+)$/gm, '<h3>$1</h3>')\n    .replace(/^## (.+)$/gm, '<h2>$1</h2>')\n    .replace(/^# (.+)$/gm, '<h1>$1</h1>')\n    .replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>')\n    .replace(/\\*(.+?)\\*/g, '<em>$1</em>')\n    .replace(/^- (.+)$/gm, '<li>$1</li>')\n    .replace(/(<li>.*<\\/li>\\n?)+/g, s => `<ul>${s}</ul>`)\n    .replace(/\\n\\n/g, '</p><p>')\n    .replace(/^(?!<[hul])/gm, '')\n    .replace(/\\[(.+?)\\]\\((.+?)\\)/g, '<a href=\"$2\" style=\"color:#d4622a\">$1</a>');\n}\n\nconst contentHtml = mdToHtml(newsletterMd);\nconst weekOf = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric' });\n\nconst html = `<!DOCTYPE html>\n<html>\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <style>\n    @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Source+Serif+4:ital,wght@0,400;0,600;1,400&display=swap');\n    * { box-sizing: border-box; margin: 0; padding: 0; }\n    body { background: #f4efe8; font-family: 'Source Serif 4', Georgia, serif; color: #2a2a2a; }\n    .wrapper { max-width: 600px; margin: 0 auto; background: #fffdf8; }\n    .masthead { background: #1c1c1c; color: #f4efe8; padding: 32px 40px; }\n    .masthead h1 { font-family: 'Playfair Display', Georgia, serif; font-size: 28px; letter-spacing: -0.5px; }\n    .masthead .edition { color: #a89880; font-size: 13px; margin-top: 6px; }\n    .body { padding: 36px 40px; }\n    .body p { font-size: 16px; line-height: 1.75; margin-bottom: 16px; }\n    .body h2 { font-family: 'Playfair Display', Georgia, serif; font-size: 20px; color: #1c1c1c; margin: 32px 0 12px; border-bottom: 1px solid #e8e0d5; padding-bottom: 6px; }\n    .body h3 { font-size: 16px; font-weight: 600; color: #1c1c1c; margin: 20px 0 6px; }\n    .body ul { padding-left: 20px; margin-bottom: 16px; }\n    .body li { font-size: 15px; line-height: 1.65; margin-bottom: 8px; }\n    .body strong { font-weight: 600; }\n    .footer { background: #1c1c1c; color: #888; font-size: 12px; padding: 20px 40px; text-align: center; }\n  </style>\n</head>\n<body>\n  <div class=\"wrapper\">\n    <div class=\"masthead\">\n      <h1>What's On in ${eventsData.city}</h1>\n      <div class=\"edition\">Week of ${weekOf} · ${eventsData.total} events found · curated by AI</div>\n    </div>\n    <div class=\"body\">\n      <p>${contentHtml}</p>\n    </div>\n    <div class=\"footer\">You're receiving this because you set this up. Events sourced from Eventbrite & Meetup. Not affiliated with any event organizer.</div>\n  </div>\n</body>\n</html>`;\n\nconst subject = `What's on in ${eventsData.city} this week (${weekOf})`;\n\nreturn [{ json: { html, subject } }];"
+      },
+      "id": "b5e9f1a2-0006",
+      "name": "Build HTML Newsletter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 320]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "resource": "contact",
+        "additionalFields": {
+          "listId": "={{$env.MAILCHIMP_LIST_ID}}"
+        }
+      },
+      "id": "b5e9f1a2-0007",
+      "name": "Get Subscriber List",
+      "type": "n8n-nodes-base.mailchimp",
+      "typeVersion": 1,
+      "position": [1340, 240],
+      "credentials": {
+        "mailchimpApi": {
+          "id": "mailchimp-creds-01",
+          "name": "Mailchimp Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{ $('Get Subscriber List').all().map(s => s.json.email_address).join(',') }}",
+        "subject": "={{$('Build HTML Newsletter').first().json.subject}}",
+        "emailType": "html",
+        "message": "={{$('Build HTML Newsletter').first().json.html}}"
+      },
+      "id": "b5e9f1a2-0008",
+      "name": "Send Newsletter",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1560, 320],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.GOOGLE_SHEET_ID}}",
+        "sheetName": "Send Log",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "date": "={{ $now.toISO() }}",
+            "city": "={{ $('Merge & Filter Events').first().json.city }}",
+            "eventsFound": "={{ $('Merge & Filter Events').first().json.total }}",
+            "subject": "={{ $('Build HTML Newsletter').first().json.subject }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "b5e9f1a2-0009",
+      "name": "Log to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [1780, 320],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every Friday 8am": {
+      "main": [
+        [
+          { "node": "Fetch Eventbrite Events", "type": "main", "index": 0 },
+          { "node": "Fetch Meetup Events", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Fetch Eventbrite Events": {
+      "main": [[{ "node": "Merge & Filter Events", "type": "main", "index": 0 }]]
+    },
+    "Fetch Meetup Events": {
+      "main": [[{ "node": "Merge & Filter Events", "type": "main", "index": 0 }]]
+    },
+    "Merge & Filter Events": {
+      "main": [[{ "node": "Claude Newsletter Editor", "type": "main", "index": 0 }]]
+    },
+    "Claude Newsletter Editor": {
+      "main": [[{ "node": "Build HTML Newsletter", "type": "main", "index": 0 }]]
+    },
+    "Build HTML Newsletter": {
+      "main": [
+        [
+          { "node": "Get Subscriber List", "type": "main", "index": 0 },
+          { "node": "Log to Google Sheets", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Get Subscriber List": {
+      "main": [[{ "node": "Send Newsletter", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": ["newsletter", "events", "local", "ai-editor"],
+  "triggerCount": 1,
+  "updatedAt": "2025-04-18T14:30:00.000Z",
+  "versionId": "v1.1.0"
+}
