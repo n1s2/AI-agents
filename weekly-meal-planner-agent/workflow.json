@@ -1,0 +1,209 @@
+{
+  "name": "Weekly Meal Planner & Grocery List Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "weeksInterval": 1,
+              "triggerAtDay": [6],
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "id": "f2c9d4e1-0001",
+      "name": "Every Saturday 9am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [200, 320]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.MEAL_PLANNER_SHEET_ID}}",
+        "sheetName": "Preferences",
+        "options": {}
+      },
+      "id": "f2c9d4e1-0002",
+      "name": "Load User Preferences",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [420, 320],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.MEAL_PLANNER_SHEET_ID}}",
+        "sheetName": "Meal History",
+        "options": {}
+      },
+      "id": "f2c9d4e1-0003",
+      "name": "Load Recent Meals",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [420, 480],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const prefs = $('Load User Preferences').all();\nconst history = $('Load Recent Meals').all();\n\n// Parse preferences (expecting key-value rows)\nconst prefMap = {};\nfor (const row of prefs) {\n  const key = row.json.setting || row.json.key;\n  const val = row.json.value;\n  if (key && val !== undefined) prefMap[key.toLowerCase().replace(/\\s+/g, '_')] = val;\n}\n\n// Last 14 days of meals to avoid repetition\nconst cutoff = new Date();\ncutoff.setDate(cutoff.getDate() - 14);\nconst recentMeals = history\n  .filter(r => r.json.date && new Date(r.json.date) >= cutoff)\n  .map(r => r.json.meal_name)\n  .filter(Boolean);\n\nconst uniqueRecent = [...new Set(recentMeals)];\n\nreturn [{\n  json: {\n    people: parseInt(prefMap.household_size) || 2,\n    dietaryRestrictions: prefMap.dietary_restrictions || 'none',\n    cuisinePreferences: prefMap.cuisine_preferences || 'varied',\n    dislikedIngredients: prefMap.disliked_ingredients || 'none',\n    cookingTimeWeekday: prefMap.weekday_cooking_time || '30 minutes',\n    cookingTimeWeekend: prefMap.weekend_cooking_time || '60 minutes',\n    budget: prefMap.weekly_budget || 'moderate',\n    includeBreakfast: (prefMap.include_breakfast || 'no').toLowerCase() === 'yes',\n    includeLunch: (prefMap.include_lunch || 'no').toLowerCase() === 'yes',\n    recentMeals: uniqueRecent.slice(0, 20),\n    weekStartDate: new Date().toISOString().split('T')[0]\n  }\n}];"
+      },
+      "id": "f2c9d4e1-0004",
+      "name": "Merge Preferences",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 380]
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-5",
+        "options": {
+          "temperature": 0.8,
+          "maxTokens": 3000
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are a practical home cook who plans weekly meals for real people with real constraints. You don't suggest precious dishes that require 12 ingredients. You think about variety across the week (not two pasta dishes back to back), ingredient overlap (buying one bunch of cilantro that gets used in two meals), and actual human schedules.\n\nYou must respond with ONLY valid JSON. No markdown, no explanation outside the JSON. No backticks.",
+              "role": "system"
+            },
+            {
+              "content": "Plan a week of dinners (Monday–Sunday) for {{ $json.people }} people.\n\nConstraints:\n- Dietary restrictions: {{ $json.dietaryRestrictions }}\n- Disliked ingredients: {{ $json.dislikedIngredients }}\n- Cuisine preferences: {{ $json.cuisinePreferences }}\n- Weekday cooking time: {{ $json.cookingTimeWeekday }}\n- Weekend cooking time: {{ $json.cookingTimeWeekend }}\n- Budget: {{ $json.budget }}\n{{ $json.includeLunch ? '- Include lunch suggestions for each day' : '' }}\n{{ $json.includeBreakfast ? '- Include breakfast suggestions Mon–Fri' : '' }}\n\nDo NOT repeat these recent meals: {{ $json.recentMeals.length ? $json.recentMeals.join(', ') : 'none to avoid' }}\n\nRespond with this exact JSON structure:\n{\n  \"week_of\": \"{{ $json.weekStartDate }}\",\n  \"people\": {{ $json.people }},\n  \"days\": [\n    {\n      \"day\": \"Monday\",\n      \"dinner\": {\n        \"name\": \"Meal name\",\n        \"description\": \"One sentence. What it is, why it works for this day.\",\n        \"prep_time_minutes\": 25,\n        \"cook_time_minutes\": 20,\n        \"servings\": {{ $json.people }},\n        \"ingredients\": [\n          { \"item\": \"chicken thighs\", \"quantity\": \"500g\" }\n        ],\n        \"key_steps\": [\"Step 1\", \"Step 2\", \"Step 3\"]\n      }\n    }\n  ],\n  \"grocery_list\": {\n    \"produce\": [ { \"item\": \"cherry tomatoes\", \"quantity\": \"250g\" } ],\n    \"protein\": [],\n    \"dairy\": [],\n    \"pantry\": [],\n    \"other\": []\n  },\n  \"meal_prep_tip\": \"One tip for batching or prepping on the weekend to make the week easier.\",\n  \"ingredient_overlaps\": [\"e.g. Cilantro used in Tuesday and Thursday meals\"]\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "f2c9d4e1-0005",
+      "name": "Claude Meal Planner",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [860, 380]
+    },
+    {
+      "parameters": {
+        "jsCode": "const rawText = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\n\nlet plan;\ntry {\n  const clean = rawText.replace(/```json|```/g, '').trim();\n  plan = JSON.parse(clean);\n} catch(e) {\n  return [{ json: { error: 'Parse error', raw: rawText, message: e.message } }];\n}\n\nreturn [{ json: plan }];"
+      },
+      "id": "f2c9d4e1-0006",
+      "name": "Parse Meal Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 380]
+    },
+    {
+      "parameters": {
+        "jsCode": "const plan = $input.first().json;\nconst days = plan.days || [];\n\nfunction escHtml(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst dayColors = ['#e8f4e8','#e8eef8','#f8f0e8','#f0e8f8','#f8f8e8','#e8f4f4','#f8e8e8'];\n\nconst mealCards = days.map((d, i) => {\n  const dinner = d.dinner || {};\n  const totalMins = (dinner.prep_time_minutes || 0) + (dinner.cook_time_minutes || 0);\n  const ingredients = (dinner.ingredients || []).map(ing =>\n    `<li style=\"font-size:13px;margin-bottom:3px\">${escHtml(ing.quantity)} ${escHtml(ing.item)}</li>`\n  ).join('');\n  const steps = (dinner.key_steps || []).map((s, j) =>\n    `<li style=\"font-size:13px;margin-bottom:5px;line-height:1.5\">${escHtml(s)}</li>`\n  ).join('');\n  return `\n    <div style=\"background:${dayColors[i]};border-radius:8px;padding:18px 20px;margin-bottom:14px\">\n      <div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:6px\">\n        <strong style=\"font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:#555\">${escHtml(d.day)}</strong>\n        <span style=\"font-size:12px;color:#777;font-family:monospace\">${totalMins > 0 ? totalMins + ' min total' : ''}</span>\n      </div>\n      <div style=\"font-size:17px;font-weight:600;margin-bottom:5px\">${escHtml(dinner.name)}</div>\n      <div style=\"font-size:14px;color:#444;margin-bottom:12px;line-height:1.5\">${escHtml(dinner.description)}</div>\n      <details style=\"cursor:pointer\">\n        <summary style=\"font-size:12px;color:#666;font-weight:600;outline:none\">Ingredients + steps</summary>\n        <div style=\"margin-top:10px;display:grid;grid-template-columns:1fr 1fr;gap:12px\">\n          <div><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:#888;margin-bottom:4px\">Ingredients</div><ul style=\"list-style:disc;padding-left:16px;margin:0\">${ingredients}</ul></div>\n          <div><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:#888;margin-bottom:4px\">How to make it</div><ol style=\"padding-left:16px;margin:0\">${steps}</ol></div>\n        </div>\n      </details>\n    </div>`;\n}).join('');\n\n// grocery list\nconst grocery = plan.grocery_list || {};\nconst grocerySections = Object.entries(grocery).map(([cat, items]) => {\n  if (!items || !items.length) return '';\n  const itemList = items.map(i => `<li style=\"font-size:14px;margin-bottom:4px\">☐ ${escHtml(i.quantity)} ${escHtml(i.item)}</li>`).join('');\n  return `<div style=\"margin-bottom:18px\"><div style=\"font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#888;margin-bottom:8px\">${escHtml(cat)}</div><ul style=\"list-style:none;padding:0;margin:0\">${itemList}</ul></div>`;\n}).join('');\n\nconst html = `<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#fafaf8;color:#1a1a1a;margin:0;padding:20px\">\n<div style=\"max-width:680px;margin:0 auto\">\n  <div style=\"background:#2d5a27;color:#fff;padding:22px 28px;border-radius:10px 10px 0 0\">\n    <h1 style=\"margin:0;font-size:20px;font-weight:600\">🥘 Meal Plan — Week of ${escHtml(plan.week_of)}</h1>\n    <div style=\"color:#a8d5a2;font-size:13px;margin-top:4px\">For ${escHtml(String(plan.people))} people</div>\n  </div>\n  <div style=\"background:#fff;padding:24px 28px;border-radius:0 0 10px 10px;box-shadow:0 2px 8px rgba(0,0,0,0.06)\">\n    ${mealCards}\n\n    ${plan.meal_prep_tip ? `<div style=\"background:#f0f7ee;border-left:3px solid #2d5a27;padding:14px 18px;margin:20px 0;border-radius:0 6px 6px 0;font-size:14px;line-height:1.6\"><strong>Weekend prep tip:</strong> ${escHtml(plan.meal_prep_tip)}</div>` : ''}\n\n    ${plan.ingredient_overlaps && plan.ingredient_overlaps.length ? `<div style=\"background:#fafaf0;border:1px solid #e8e4c8;padding:14px 18px;border-radius:6px;margin-bottom:20px\"><div style=\"font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:#888;margin-bottom:8px\">Ingredient overlaps</div>${plan.ingredient_overlaps.map(o => `<div style=\"font-size:13px;color:#555;margin-bottom:4px\">→ ${escHtml(o)}</div>`).join('')}</div>` : ''}\n\n    <h2 style=\"font-size:16px;margin:24px 0 16px;border-bottom:2px solid #e8e4df;padding-bottom:6px\">🛒 Grocery List</h2>\n    <div style=\"columns:2;gap:24px\">${grocerySections}</div>\n  </div>\n  <div style=\"text-align:center;font-size:11px;color:#aaa;margin-top:14px;font-family:monospace\">Generated ${new Date().toLocaleDateString()} · Weekly Meal Planner Agent</div>\n</div>\n</body></html>`;\n\nreturn [{ json: { html, plan, subject: `Your meal plan for the week of ${plan.week_of}` } }];"
+      },
+      "id": "f2c9d4e1-0007",
+      "name": "Build HTML Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 380]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.MEAL_PLANNER_SHEET_ID}}",
+        "sheetName": "Meal History",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "date": "={{ $now.toFormat('yyyy-MM-dd') }}",
+            "meal_name": "={{ $json.plan.days.map(d => d.dinner?.name).filter(Boolean).join(' | ') }}",
+            "week_of": "={{ $json.plan.week_of }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "f2c9d4e1-0008",
+      "name": "Save to History",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [1520, 280],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$env.USER_EMAIL}}",
+        "subject": "={{$json.subject}}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "f2c9d4e1-0009",
+      "name": "Email Meal Plan",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1520, 460],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every Saturday 9am": {
+      "main": [
+        [
+          { "node": "Load User Preferences", "type": "main", "index": 0 },
+          { "node": "Load Recent Meals", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Load User Preferences": {
+      "main": [[{ "node": "Merge Preferences", "type": "main", "index": 0 }]]
+    },
+    "Load Recent Meals": {
+      "main": [[{ "node": "Merge Preferences", "type": "main", "index": 0 }]]
+    },
+    "Merge Preferences": {
+      "main": [[{ "node": "Claude Meal Planner", "type": "main", "index": 0 }]]
+    },
+    "Claude Meal Planner": {
+      "main": [[{ "node": "Parse Meal Plan", "type": "main", "index": 0 }]]
+    },
+    "Parse Meal Plan": {
+      "main": [[{ "node": "Build HTML Email", "type": "main", "index": 0 }]]
+    },
+    "Build HTML Email": {
+      "main": [
+        [
+          { "node": "Save to History", "type": "main", "index": 0 },
+          { "node": "Email Meal Plan", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": ["food", "meal-planning", "household", "weekly"],
+  "triggerCount": 1,
+  "updatedAt": "2025-04-26T09:30:00.000Z",
+  "versionId": "v1.2.0"
+}

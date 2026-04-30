@@ -1,0 +1,238 @@
+{
+  "name": "Outage Postmortem Generator",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "postmortem",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "e7a3b2d1-0001",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\n\nconst required = ['incident_title', 'severity', 'started_at', 'resolved_at', 'summary', 'timeline'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) {\n  return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\n}\n\nconst validSeverities = ['SEV1', 'SEV2', 'SEV3', 'P0', 'P1', 'P2', 'critical', 'high', 'medium'];\nif (!validSeverities.includes(body.severity)) {\n  return [{ json: { valid: false, error: `severity must be one of: ${validSeverities.join(', ')}` } }];\n}\n\nconst start = new Date(body.started_at);\nconst end = new Date(body.resolved_at);\nif (isNaN(start) || isNaN(end)) {\n  return [{ json: { valid: false, error: 'started_at and resolved_at must be valid ISO timestamps' } }];\n}\n\nconst durationMs = end - start;\nconst durationMins = Math.round(durationMs / 60000);\nconst durationHuman = durationMins < 60\n  ? `${durationMins} minutes`\n  : `${Math.floor(durationMins / 60)}h ${durationMins % 60}m`;\n\nreturn [{\n  json: {\n    valid: true,\n    incidentTitle: body.incident_title,\n    severity: body.severity,\n    startedAt: body.started_at,\n    resolvedAt: body.resolved_at,\n    durationMins,\n    durationHuman,\n    summary: body.summary.slice(0, 2000),\n    timeline: Array.isArray(body.timeline) ? body.timeline.slice(0, 30) : [],\n    affectedSystems: body.affected_systems || [],\n    impactDescription: body.impact_description || '',\n    team: body.team || 'Engineering',\n    incidentCommander: body.incident_commander || '',\n    slackThread: body.slack_thread_url || null,\n    outputFormat: body.output_format || 'markdown',\n    notifyEmail: body.notify_email || null,\n    notifySlack: body.notify_slack_channel || null\n  }\n}];"
+      },
+      "id": "e7a3b2d1-0002",
+      "name": "Validate & Enrich",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 320]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-v",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "e7a3b2d1-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [640, 320]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "e7a3b2d1-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [860, 460]
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-5",
+        "options": {
+          "temperature": 0.4,
+          "maxTokens": 2800
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are a staff engineer who writes exceptionally clear, blameless postmortem documents. Your writing is direct and technical but also accessible to non-engineers who might read it. You focus on systems and processes, never on individual fault.\n\nGood postmortems have:\n- A crisp summary that a VP can understand in 30 seconds\n- A technical timeline that an oncall engineer can learn from\n- Root cause analysis that goes at least 2 levels deep (the 5-whys approach)\n- Action items that are concrete and assigned, not vague recommendations\n- Honest reflection on what detection/response could have been faster\n\nAvoid corporate hedging. Avoid passive voice when active is clearer. Don't soften root causes with euphemisms.",
+              "role": "system"
+            },
+            {
+              "content": "Write a complete postmortem for this incident.\n\n**Incident:** {{ $json.incidentTitle }}\n**Severity:** {{ $json.severity }}\n**Duration:** {{ $json.durationHuman }} ({{ $json.startedAt }} → {{ $json.resolvedAt }})\n**Team:** {{ $json.team }}{{ $json.incidentCommander ? ' | IC: ' + $json.incidentCommander : '' }}\n**Affected Systems:** {{ $json.affectedSystems.length ? $json.affectedSystems.join(', ') : 'Not specified' }}\n\n**Impact:**\n{{ $json.impactDescription || 'Not specified' }}\n\n**Summary provided by responders:**\n{{ $json.summary }}\n\n**Timeline events:**\n{{ $json.timeline.map(t => `- ${t.time || ''}: ${t.event || t}`).join('\\n') }}\n\nGenerate the postmortem in this exact markdown structure:\n\n# Postmortem: [incident title]\n**Date:** [date from startedAt]\n**Severity:** [severity]\n**Duration:** [durationHuman]\n**Status:** Resolved\n\n## Summary\n[2-3 sentences. What broke, for how long, what was the impact. No jargon.]\n\n## Impact\n[Specific, quantified where possible. Users affected, requests failed, revenue impact if known, SLA breach yes/no.]\n\n## Timeline\n[Detailed table or list with timestamps]\n\n## Root Cause\n[Technical explanation. Go deep. Use 5-whys if helpful.]\n\n## Contributing Factors\n[Things that made this worse or harder to catch. Could be missing alerts, tech debt, process gaps.]\n\n## What Went Well\n[Honest — what actually worked? Fast detection? Good comms? Solid rollback?]\n\n## What Could Have Gone Better\n[Honest — no softening. Where did the team lose time or miss signals?]\n\n## Action Items\n| Priority | Action | Owner | Due |\n|----------|--------|-------|-----|\n[5-8 concrete action items with suggested owners by role, not name]\n\n## Lessons Learned\n[1-3 sentences of the key takeaway for the team and org]",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "e7a3b2d1-0005",
+      "name": "Claude Postmortem Writer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [860, 220]
+    },
+    {
+      "parameters": {
+        "jsCode": "const rawMd = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nconst data = $('Validate & Enrich').first().json;\n\n// Simple md → HTML for email\nfunction mdToHtml(md) {\n  return md\n    .replace(/^# (.+)$/gm, '<h1 style=\"font-size:22px;margin:0 0 8px\">$1</h1>')\n    .replace(/^## (.+)$/gm, '<h2 style=\"font-size:16px;margin:24px 0 8px;color:#111;border-bottom:1px solid #e0e0e0;padding-bottom:4px\">$1</h2>')\n    .replace(/^\\*\\*(.+?)\\*\\*/gm, '<strong>$1</strong>')\n    .replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>')\n    .replace(/^\\| (.+) \\|$/gm, (line) => {\n      const cells = line.split('|').filter(c => c.trim());\n      const isHeader = cells.every(c => /^[-: ]+$/.test(c.trim()));\n      if (isHeader) return '';\n      const tag = 'td';\n      return '<tr>' + cells.map(c => `<${tag} style=\"padding:6px 10px;border:1px solid #ddd\">${c.trim()}</${tag}>`).join('') + '</tr>';\n    })\n    .replace(/(<tr>.*<\\/tr>\\n?)+/gs, t => `<table style=\"border-collapse:collapse;width:100%;margin:12px 0;font-size:13px\">${t}</table>`)\n    .replace(/^- (.+)$/gm, '<li style=\"margin-bottom:4px\">$1</li>')\n    .replace(/(<li[^>]*>.*<\\/li>\\n?)+/gs, s => `<ul style=\"padding-left:20px;margin:8px 0\">${s}</ul>`)\n    .replace(/\\n\\n/g, '</p><p style=\"margin:0 0 12px\">')\n    .replace(/\\n/g, '<br>');\n}\n\nconst severityColors = {\n  SEV1: '#dc2626', P0: '#dc2626', critical: '#dc2626',\n  SEV2: '#ea580c', P1: '#ea580c', high: '#ea580c',\n  SEV3: '#ca8a04', P2: '#ca8a04', medium: '#ca8a04'\n};\nconst severityColor = severityColors[data.severity] || '#6b7280';\n\nconst htmlEmail = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head>\n<body style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#1a1a1a;background:#f5f5f4;margin:0;padding:24px\">\n<div style=\"max-width:700px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,0.08)\">\n  <div style=\"background:#111;color:#fff;padding:20px 28px;display:flex;align-items:center;gap:12px\">\n    <span style=\"background:${severityColor};color:#fff;font-size:11px;font-weight:700;padding:3px 8px;border-radius:4px;font-family:monospace\">${data.severity}</span>\n    <span style=\"font-size:15px;font-weight:500\">${data.incidentTitle}</span>\n    <span style=\"margin-left:auto;color:#888;font-size:12px;font-family:monospace\">${data.durationHuman}</span>\n  </div>\n  <div style=\"padding:28px\">\n    <p style=\"margin:0 0 12px\">${mdToHtml(rawMd)}</p>\n  </div>\n  <div style=\"background:#f5f5f4;padding:14px 28px;font-size:11px;color:#888;font-family:monospace\">\n    Generated by Outage Postmortem Generator · ${new Date().toISOString()}\n  </div>\n</div>\n</body></html>`;\n\nreturn [{\n  json: {\n    markdown: rawMd,\n    htmlEmail,\n    incidentTitle: data.incidentTitle,\n    severity: data.severity,\n    notifyEmail: data.notifyEmail,\n    notifySlack: data.notifySlack,\n    slackThread: data.slackThread\n  }\n}];"
+      },
+      "id": "e7a3b2d1-0006",
+      "name": "Format Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 220]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-email",
+              "leftValue": "={{ $json.notifyEmail }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "e7a3b2d1-0007",
+      "name": "Send Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1300, 220]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.notifyEmail}}",
+        "subject": "[Postmortem] {{ $json.severity }}: {{ $json.incidentTitle }}",
+        "emailType": "html",
+        "message": "={{$json.htmlEmail}}"
+      },
+      "id": "e7a3b2d1-0008",
+      "name": "Email Postmortem",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1520, 160],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-slack",
+              "leftValue": "={{ $('Format Output').first().json.notifySlack }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "e7a3b2d1-0009",
+      "name": "Post to Slack?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1300, 380]
+    },
+    {
+      "parameters": {
+        "channel": "={{ $('Format Output').first().json.notifySlack }}",
+        "text": "📋 *Postmortem Published: {{ $('Format Output').first().json.incidentTitle }}*\n\n{{ $('Format Output').first().json.markdown.slice(0, 2800) }}\n\n_Full doc in your email or attached above._",
+        "otherOptions": {}
+      },
+      "id": "e7a3b2d1-0010",
+      "name": "Post to Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1520, 380],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-creds-01",
+          "name": "Slack Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'generated', markdown: $('Format Output').first().json.markdown, emailed: $('Format Output').first().json.notifyEmail ? true : false, slacked: $('Format Output').first().json.notifySlack ? true : false } }}"
+      },
+      "id": "e7a3b2d1-0011",
+      "name": "Return Postmortem",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1740, 260]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [[{ "node": "Validate & Enrich", "type": "main", "index": 0 }]]
+    },
+    "Validate & Enrich": {
+      "main": [[{ "node": "Valid?", "type": "main", "index": 0 }]]
+    },
+    "Valid?": {
+      "main": [
+        [{ "node": "Claude Postmortem Writer", "type": "main", "index": 0 }],
+        [{ "node": "Return Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Claude Postmortem Writer": {
+      "main": [[{ "node": "Format Output", "type": "main", "index": 0 }]]
+    },
+    "Format Output": {
+      "main": [
+        [
+          { "node": "Send Email?", "type": "main", "index": 0 },
+          { "node": "Post to Slack?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Send Email?": {
+      "main": [
+        [{ "node": "Email Postmortem", "type": "main", "index": 0 }],
+        [{ "node": "Return Postmortem", "type": "main", "index": 0 }]
+      ]
+    },
+    "Email Postmortem": {
+      "main": [[{ "node": "Return Postmortem", "type": "main", "index": 0 }]]
+    },
+    "Post to Slack?": {
+      "main": [
+        [{ "node": "Post to Slack", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Post to Slack": {
+      "main": [[{ "node": "Return Postmortem", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": ["engineering", "incidents", "postmortem", "devops"],
+  "triggerCount": 0,
+  "updatedAt": "2025-04-25T16:00:00.000Z",
+  "versionId": "v1.0.1"
+}
