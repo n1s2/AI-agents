@@ -1,0 +1,236 @@
+{
+  "name": "Freelance Invoice Chaser Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "id": "a9f3c1d2-0001",
+      "name": "Daily 9am Check",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [200, 320]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.INVOICES_SHEET_ID}}",
+        "sheetName": "Invoices",
+        "options": {}
+      },
+      "id": "a9f3c1d2-0002",
+      "name": "Load All Invoices",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [420, 320],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(r => r.json);\nconst today = new Date();\ntoday.setHours(0, 0, 0, 0);\n\nconst overdueInvoices = [];\n\nfor (const row of rows) {\n  if (!row.invoice_id || !row.due_date || !row.client_email) continue;\n\n  const status = (row.status || '').toLowerCase();\n  if (status === 'paid' || status === 'cancelled' || status === 'void') continue;\n\n  const dueDate = new Date(row.due_date);\n  dueDate.setHours(0, 0, 0, 0);\n  if (isNaN(dueDate)) continue;\n\n  const daysOverdue = Math.floor((today - dueDate) / 86400000);\n  if (daysOverdue < 0) continue; // not due yet\n\n  // Determine chase stage based on days overdue\n  let stage = 1;\n  if (daysOverdue >= 30) stage = 4;\n  else if (daysOverdue >= 14) stage = 3;\n  else if (daysOverdue >= 7) stage = 2;\n\n  const lastChased = row.last_chased_at ? new Date(row.last_chased_at) : null;\n  const daysSinceLastChase = lastChased\n    ? Math.floor((today - lastChased) / 86400000)\n    : 999;\n\n  // Don't re-chase within 3 days unless escalating\n  if (daysSinceLastChase < 3 && stage === parseInt(row.chase_stage || 1)) continue;\n\n  overdueInvoices.push({\n    invoiceId: row.invoice_id,\n    clientName: row.client_name || 'Client',\n    clientEmail: row.client_email,\n    amount: parseFloat(row.amount) || 0,\n    currency: row.currency || 'USD',\n    dueDate: row.due_date,\n    projectName: row.project_name || '',\n    daysOverdue,\n    stage,\n    lastChased: row.last_chased_at || null,\n    chaseCount: parseInt(row.chase_count) || 0,\n    freelancerName: row.freelancer_name || $env.FREELANCER_NAME || 'Freelancer',\n    notes: row.notes || ''\n  });\n}\n\nreturn overdueInvoices.map(inv => ({ json: inv }));"
+      },
+      "id": "a9f3c1d2-0003",
+      "name": "Find Overdue Invoices",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 320]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-any",
+              "leftValue": "={{ $input.all().length }}",
+              "rightValue": 0,
+              "operator": { "type": "number", "operation": "gt" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "a9f3c1d2-0004",
+      "name": "Any Overdue?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [860, 320]
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-5",
+        "options": { "temperature": 0.5, "maxTokens": 600 },
+        "messages": {
+          "values": [
+            {
+              "content": "You write invoice follow-up emails for freelancers. Your tone matches the chase stage:\n\n- Stage 1 (1–6 days overdue): Friendly and light. Assume it slipped through. No pressure.\n- Stage 2 (7–13 days): Polite but clearly asking for action. Still warm.\n- Stage 3 (14–29 days): Firm and professional. Direct about the delay. Still respectful.\n- Stage 4 (30+ days): Serious and formal. Mention that further steps may be necessary if not resolved.\n\nNever be rude or passive-aggressive. Never grovel or over-apologize. Keep it short — under 150 words for stages 1-2, under 200 for 3-4. No subject line needed — just the email body.",
+              "role": "system"
+            },
+            {
+              "content": "Write a payment follow-up email.\n\nDetails:\n- Freelancer name: {{ $json.freelancerName }}\n- Client name: {{ $json.clientName }}\n- Invoice ID: {{ $json.invoiceId }}\n- Project: {{ $json.projectName || 'not specified' }}\n- Amount: {{ $json.currency }} {{ $json.amount.toLocaleString() }}\n- Due date: {{ $json.dueDate }}\n- Days overdue: {{ $json.daysOverdue }}\n- Chase stage: {{ $json.stage }} of 4\n- Times chased before: {{ $json.chaseCount }}\n\nAdditional context: {{ $json.notes || 'none' }}\n\nWrite only the email body. Start with 'Hi {{ $json.clientName }},'",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "a9f3c1d2-0005",
+      "name": "Claude Writes Follow-up",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [1080, 220]
+    },
+    {
+      "parameters": {
+        "jsCode": "const emailBody = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nconst inv = $('Find Overdue Invoices').first().json;\n\nconst stageSubjects = {\n  1: `Quick reminder — Invoice ${inv.invoiceId}`,\n  2: `Following up — Invoice ${inv.invoiceId} (${inv.daysOverdue} days overdue)`,\n  3: `Payment required — Invoice ${inv.invoiceId}`,\n  4: `Urgent: Invoice ${inv.invoiceId} — ${inv.daysOverdue} days outstanding`\n};\n\nconst subject = stageSubjects[inv.stage] || `Invoice ${inv.invoiceId} follow-up`;\n\nreturn [{ json: { emailBody, subject, inv } }];"
+      },
+      "id": "a9f3c1d2-0006",
+      "name": "Build Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 220]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FREELANCER_EMAIL}}",
+        "toEmail": "={{$json.inv.clientEmail}}",
+        "subject": "={{$json.subject}}",
+        "emailType": "text",
+        "message": "={{$json.emailBody}}"
+      },
+      "id": "a9f3c1d2-0007",
+      "name": "Send Follow-up Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1520, 220],
+      "credentials": {
+        "smtp": { "id": "smtp-creds-01", "name": "SMTP Account" }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": "={{$env.INVOICES_SHEET_ID}}",
+        "sheetName": "Invoices",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "invoice_id": "={{ $json.inv.invoiceId }}",
+            "last_chased_at": "={{ $now.toFormat('yyyy-MM-dd') }}",
+            "chase_count": "={{ $json.inv.chaseCount + 1 }}",
+            "chase_stage": "={{ $json.inv.stage }}",
+            "status": "chasing"
+          }
+        },
+        "options": {
+          "handlingExtraData": "insertInNewColumn"
+        }
+      },
+      "id": "a9f3c1d2-0008",
+      "name": "Update Invoice Status",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [1740, 220],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-stage4",
+              "leftValue": "={{ $json.inv.stage }}",
+              "rightValue": 4,
+              "operator": { "type": "number", "operation": "gte" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "a9f3c1d2-0009",
+      "name": "Stage 4 Escalation?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1960, 220]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FREELANCER_EMAIL}}",
+        "toEmail": "={{$env.FREELANCER_EMAIL}}",
+        "subject": "⚠️ Invoice {{ $('Build Email').first().json.inv.invoiceId }} is 30+ days overdue — action needed",
+        "emailType": "html",
+        "message": "<p>Your invoice <strong>{{ $('Build Email').first().json.inv.invoiceId }}</strong> for <strong>{{ $('Build Email').first().json.inv.clientName }}</strong> is now <strong>{{ $('Build Email').first().json.inv.daysOverdue }} days overdue</strong>.</p><p>Amount: {{ $('Build Email').first().json.inv.currency }} {{ $('Build Email').first().json.inv.amount }}</p><p>The automated follow-up has been sent but you may want to consider a phone call, a formal letter, or contacting a debt collection service.</p><p>This is chase #{{ $('Build Email').first().json.inv.chaseCount + 1 }}.</p>"
+      },
+      "id": "a9f3c1d2-0010",
+      "name": "Alert Freelancer",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [2180, 160],
+      "credentials": {
+        "smtp": { "id": "smtp-creds-01", "name": "SMTP Account" }
+      }
+    }
+  ],
+  "connections": {
+    "Daily 9am Check": {
+      "main": [[{ "node": "Load All Invoices", "type": "main", "index": 0 }]]
+    },
+    "Load All Invoices": {
+      "main": [[{ "node": "Find Overdue Invoices", "type": "main", "index": 0 }]]
+    },
+    "Find Overdue Invoices": {
+      "main": [[{ "node": "Any Overdue?", "type": "main", "index": 0 }]]
+    },
+    "Any Overdue?": {
+      "main": [
+        [{ "node": "Claude Writes Follow-up", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Claude Writes Follow-up": {
+      "main": [[{ "node": "Build Email", "type": "main", "index": 0 }]]
+    },
+    "Build Email": {
+      "main": [[{ "node": "Send Follow-up Email", "type": "main", "index": 0 }]]
+    },
+    "Send Follow-up Email": {
+      "main": [[{ "node": "Update Invoice Status", "type": "main", "index": 0 }]]
+    },
+    "Update Invoice Status": {
+      "main": [[{ "node": "Stage 4 Escalation?", "type": "main", "index": 0 }]]
+    },
+    "Stage 4 Escalation?": {
+      "main": [
+        [{ "node": "Alert Freelancer", "type": "main", "index": 0 }],
+        []
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": ["freelance", "invoicing", "finance", "automation"],
+  "triggerCount": 1,
+  "updatedAt": "2025-04-27T09:00:00.000Z",
+  "versionId": "v1.0.3"
+}

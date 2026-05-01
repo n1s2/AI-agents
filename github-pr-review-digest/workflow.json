@@ -1,0 +1,235 @@
+{
+  "name": "GitHub PR Review Digest Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "b1e4f7a3-0001",
+      "name": "Every Hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [200, 320]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.github.com/repos/={{$env.GITHUB_OWNER}}/={{$env.GITHUB_REPO}}/pulls",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{$env.GITHUB_TOKEN}}" },
+            { "name": "Accept", "value": "application/vnd.github.v3+json" },
+            { "name": "X-GitHub-Api-Version", "value": "2022-11-28" }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "state", "value": "open" },
+            { "name": "per_page", "value": "30" },
+            { "name": "sort", "value": "updated" },
+            { "name": "direction", "value": "desc" }
+          ]
+        }
+      },
+      "id": "b1e4f7a3-0002",
+      "name": "Fetch Open PRs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [420, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const prs = $input.first().json;\nif (!Array.isArray(prs) || prs.length === 0) {\n  return [{ json: { skip: true, reason: 'No open PRs' } }];\n}\n\nconst now = new Date();\nconst oneHourAgo = new Date(now - 3600000);\nconst oneDayAgo = new Date(now - 86400000);\nconst threeDaysAgo = new Date(now - 3 * 86400000);\n\nconst enriched = prs.map(pr => {\n  const updatedAt = new Date(pr.updated_at);\n  const createdAt = new Date(pr.created_at);\n  const ageHours = Math.floor((now - createdAt) / 3600000);\n  const ageDays = Math.floor(ageHours / 24);\n  const isStale = createdAt < threeDaysAgo && updatedAt < threeDaysAgo;\n  const isRecentlyUpdated = updatedAt >= oneHourAgo;\n  const isDraft = pr.draft || false;\n  const reviewers = (pr.requested_reviewers || []).map(r => r.login);\n  const labels = (pr.labels || []).map(l => l.name);\n\n  return {\n    number: pr.number,\n    title: pr.title,\n    author: pr.user?.login || 'unknown',\n    url: pr.html_url,\n    isDraft,\n    isStale,\n    isRecentlyUpdated,\n    ageHours,\n    ageDays,\n    reviewers,\n    labels,\n    reviewCount: pr.requested_reviewers?.length || 0,\n    additions: pr.additions || 0,\n    deletions: pr.deletions || 0,\n    changedFiles: pr.changed_files || 0,\n    body: (pr.body || '').slice(0, 500),\n    createdAt: pr.created_at,\n    updatedAt: pr.updated_at,\n    baseBranch: pr.base?.ref || 'main',\n    headBranch: pr.head?.ref || ''\n  };\n});\n\nconst stalePRs = enriched.filter(p => p.isStale && !p.isDraft);\nconst urgentPRs = enriched.filter(p => !p.isDraft && p.reviewCount === 0 && p.ageHours > 4);\nconst recentlyUpdated = enriched.filter(p => p.isRecentlyUpdated && !p.isDraft);\nconst allOpen = enriched.filter(p => !p.isDraft);\nconst drafts = enriched.filter(p => p.isDraft);\n\nreturn [{\n  json: {\n    skip: false,\n    allOpen,\n    stalePRs,\n    urgentPRs,\n    recentlyUpdated,\n    drafts,\n    repo: `${$env.GITHUB_OWNER}/${$env.GITHUB_REPO}`,\n    generatedAt: now.toISOString()\n  }\n}];"
+      },
+      "id": "b1e4f7a3-0003",
+      "name": "Classify PRs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 320]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-skip",
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": false,
+              "operator": { "type": "boolean", "operation": "false" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "b1e4f7a3-0004",
+      "name": "Has PRs?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [860, 320]
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-5",
+        "options": { "temperature": 0.4, "maxTokens": 1200 },
+        "messages": {
+          "values": [
+            {
+              "content": "You are a tech lead writing a concise PR digest for an engineering team. Your job is to give engineers a clear, opinionated read on what needs attention — not a neutral list of facts.\n\nYou notice things: a PR that's been open 4 days with no reviewer assigned is a problem. A PR with 2000+ line changes needs to be flagged. A draft that's been sitting for a week might be forgotten. Small, focused PRs from active contributors should be celebrated briefly.\n\nKeep your language direct and human. No bullet-point soup. Write like a teammate who actually looked at the queue.",
+              "role": "system"
+            },
+            {
+              "content": "Repo: {{ $json.repo }}\nGenerated: {{ $json.generatedAt }}\n\nAll open PRs ({{ $json.allOpen.length }}):\n{{ $json.allOpen.map(p => `#${p.number} \"${p.title}\" by @${p.author} — ${p.ageDays}d old, ${p.changedFiles} files changed (+${p.additions}/-${p.deletions}), reviewers: ${p.reviewers.length ? p.reviewers.join(', ') : 'NONE'}, labels: ${p.labels.join(', ') || 'none'}`).join('\\n') }}\n\nStale PRs (3+ days no activity): {{ $json.stalePRs.length }}\n{{ $json.stalePRs.map(p => `#${p.number}`).join(', ') || 'none' }}\n\nNeeds reviewer assigned (open 4+ hours, no reviewer): {{ $json.urgentPRs.length }}\n{{ $json.urgentPRs.map(p => `#${p.number} \"${p.title}\"`).join('\\n') || 'none' }}\n\nDrafts: {{ $json.drafts.length }}\n{{ $json.drafts.map(p => `#${p.number} \"${p.title}\" — ${p.ageDays}d`).join('\\n') || 'none' }}\n\nWrite a PR digest in markdown. Include:\n1. A one-paragraph overall read of the queue's health\n2. What needs immediate attention (if anything)\n3. Any PRs worth calling out positively or flagging as risky\n4. A closing sentence with a concrete suggestion for the team today",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "b1e4f7a3-0005",
+      "name": "Claude Queue Analysis",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [1080, 220]
+    },
+    {
+      "parameters": {
+        "jsCode": "const analysis = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nconst data = $('Classify PRs').first().json;\n\nconst staleBadge = data.stalePRs.length > 0\n  ? `<span style=\"background:#fee2e2;color:#b91c1c;font-size:11px;padding:2px 7px;border-radius:10px;font-weight:600\">${data.stalePRs.length} stale</span>`\n  : '';\nconst urgentBadge = data.urgentPRs.length > 0\n  ? `<span style=\"background:#fef9c3;color:#92400e;font-size:11px;padding:2px 7px;border-radius:10px;font-weight:600\">${data.urgentPRs.length} need reviewer</span>`\n  : '';\n\nconst prRows = data.allOpen.map(pr => {\n  const sizeColor = pr.additions + pr.deletions > 500 ? '#dc2626' : pr.additions + pr.deletions > 200 ? '#d97706' : '#16a34a';\n  const ageColor = pr.ageDays >= 3 ? '#dc2626' : pr.ageDays >= 1 ? '#d97706' : '#6b7280';\n  return `\n    <tr style=\"border-bottom:1px solid #f0f0f0\">\n      <td style=\"padding:10px 12px;font-family:monospace;font-size:13px\"><a href=\"${pr.url}\" style=\"color:#2563eb;text-decoration:none\">#${pr.number}</a></td>\n      <td style=\"padding:10px 12px;font-size:14px;max-width:260px\">${pr.title}${pr.isDraft ? ' <span style=\"color:#9ca3af;font-size:11px\">[draft]</span>' : ''}</td>\n      <td style=\"padding:10px 12px;font-size:13px;color:#555\">@${pr.author}</td>\n      <td style=\"padding:10px 12px;font-size:13px;color:${ageColor}\">${pr.ageDays}d</td>\n      <td style=\"padding:10px 12px;font-size:13px;color:${sizeColor}\">+${pr.additions}/-${pr.deletions}</td>\n      <td style=\"padding:10px 12px;font-size:13px;color:#555\">${pr.reviewers.length ? pr.reviewers.join(', ') : '<span style=\"color:#dc2626\">none</span>'}</td>\n    </tr>`;\n}).join('');\n\n// Convert basic markdown to HTML for analysis section\nconst analysisHtml = analysis\n  .replace(/^## (.+)$/gm, '<h3 style=\"font-size:15px;margin:16px 0 6px\">$1</h3>')\n  .replace(/^# (.+)$/gm, '<h2 style=\"font-size:17px;margin:0 0 12px\">$1</h2>')\n  .replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>')\n  .replace(/`([^`]+)`/g, '<code style=\"background:#f3f4f6;padding:1px 4px;border-radius:3px;font-size:13px\">$1</code>')\n  .replace(/\\n\\n/g, '</p><p style=\"margin:0 0 10px\">')\n  .replace(/\\n/g, '<br>');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head>\n<body style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f6f8fa;margin:0;padding:20px;color:#1a1a1a\">\n<div style=\"max-width:720px;margin:0 auto\">\n  <div style=\"background:#24292f;color:#fff;padding:18px 24px;border-radius:8px 8px 0 0;display:flex;align-items:center;gap:12px\">\n    <span style=\"font-size:18px\">⬡</span>\n    <div>\n      <div style=\"font-size:15px;font-weight:600\">${data.repo} — PR Digest</div>\n      <div style=\"font-size:12px;color:#8b949e\">${new Date(data.generatedAt).toLocaleString()} · ${data.allOpen.length} open PRs ${staleBadge} ${urgentBadge}</div>\n    </div>\n  </div>\n  <div style=\"background:#fff;padding:22px 24px;border:1px solid #e0e0e0;border-top:none\">\n    <p style=\"margin:0 0 10px\">${analysisHtml}</p>\n  </div>\n  <div style=\"background:#fff;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px;overflow:hidden\">\n    <table style=\"width:100%;border-collapse:collapse\">\n      <thead><tr style=\"background:#f6f8fa;font-size:11px;text-transform:uppercase;letter-spacing:0.4px;color:#777\">\n        <th style=\"padding:8px 12px;text-align:left\">PR</th>\n        <th style=\"padding:8px 12px;text-align:left\">Title</th>\n        <th style=\"padding:8px 12px;text-align:left\">Author</th>\n        <th style=\"padding:8px 12px;text-align:left\">Age</th>\n        <th style=\"padding:8px 12px;text-align:left\">Size</th>\n        <th style=\"padding:8px 12px;text-align:left\">Reviewers</th>\n      </tr></thead>\n      <tbody>${prRows}</tbody>\n    </table>\n  </div>\n  <div style=\"font-size:11px;color:#aaa;text-align:center;margin-top:12px;font-family:monospace\">GitHub PR Digest Agent · ${data.repo}</div>\n</div></body></html>`;\n\nreturn [{ json: { html, analysis, repo: data.repo, openCount: data.allOpen.length, urgentCount: data.urgentPRs.length } }];"
+      },
+      "id": "b1e4f7a3-0006",
+      "name": "Build Digest Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 220]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-worthy",
+              "leftValue": "={{ $json.openCount }}",
+              "rightValue": 0,
+              "operator": { "type": "number", "operation": "gt" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "b1e4f7a3-0007",
+      "name": "Worth Sending?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1520, 220]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$env.TEAM_EMAIL}}",
+        "subject": "[{{ $json.repo }}] PR Digest — {{ $json.openCount }} open{{ $json.urgentCount > 0 ? ', ' + $json.urgentCount + ' need attention' : '' }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "b1e4f7a3-0008",
+      "name": "Send Digest",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1740, 160],
+      "credentials": {
+        "smtp": { "id": "smtp-creds-01", "name": "SMTP Account" }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-slack-on",
+              "leftValue": "={{ $env.SLACK_CHANNEL || '' }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "b1e4f7a3-0009",
+      "name": "Slack Enabled?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1740, 340]
+    },
+    {
+      "parameters": {
+        "channel": "={{$env.SLACK_CHANNEL}}",
+        "text": "📋 *PR Digest — {{ $('Build Digest Email').first().json.repo }}*\n{{ $('Build Digest Email').first().json.analysis.slice(0, 1500) }}\n\n_{{ $('Build Digest Email').first().json.openCount }} open PRs · Full digest in your email_",
+        "otherOptions": {}
+      },
+      "id": "b1e4f7a3-0010",
+      "name": "Post to Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1960, 340],
+      "credentials": {
+        "slackApi": { "id": "slack-creds-01", "name": "Slack Account" }
+      }
+    }
+  ],
+  "connections": {
+    "Every Hour": {
+      "main": [[{ "node": "Fetch Open PRs", "type": "main", "index": 0 }]]
+    },
+    "Fetch Open PRs": {
+      "main": [[{ "node": "Classify PRs", "type": "main", "index": 0 }]]
+    },
+    "Classify PRs": {
+      "main": [[{ "node": "Has PRs?", "type": "main", "index": 0 }]]
+    },
+    "Has PRs?": {
+      "main": [
+        [{ "node": "Claude Queue Analysis", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Claude Queue Analysis": {
+      "main": [[{ "node": "Build Digest Email", "type": "main", "index": 0 }]]
+    },
+    "Build Digest Email": {
+      "main": [[{ "node": "Worth Sending?", "type": "main", "index": 0 }]]
+    },
+    "Worth Sending?": {
+      "main": [
+        [
+          { "node": "Send Digest", "type": "main", "index": 0 },
+          { "node": "Slack Enabled?", "type": "main", "index": 0 }
+        ],
+        []
+      ]
+    },
+    "Slack Enabled?": {
+      "main": [
+        [{ "node": "Post to Slack", "type": "main", "index": 0 }],
+        []
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": ["github", "engineering", "devex", "code-review"],
+  "triggerCount": 1,
+  "updatedAt": "2025-04-27T14:00:00.000Z",
+  "versionId": "v1.1.0"
+}

@@ -1,0 +1,205 @@
+{
+  "name": "Language Learning Daily Coach",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 7,
+              "triggerAtMinute": 30
+            }
+          ]
+        }
+      },
+      "id": "c5a8b2e4-0001",
+      "name": "Daily 7:30am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [200, 320]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.LANG_SHEET_ID}}",
+        "sheetName": "Profile",
+        "options": {}
+      },
+      "id": "c5a8b2e4-0002",
+      "name": "Load Learner Profile",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [420, 240],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.LANG_SHEET_ID}}",
+        "sheetName": "Progress Log",
+        "options": {}
+      },
+      "id": "c5a8b2e4-0003",
+      "name": "Load Progress Log",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [420, 420],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const profileRows = $('Load Learner Profile').all();\nconst progressRows = $('Load Progress Log').all();\n\n// Parse profile key-value pairs\nconst profile = {};\nfor (const row of profileRows) {\n  const k = (row.json.setting || '').toLowerCase().replace(/\\s+/g, '_');\n  const v = row.json.value;\n  if (k) profile[k] = v;\n}\n\nconst targetLanguage = profile.target_language || 'Spanish';\nconst nativeLanguage = profile.native_language || 'English';\nconst level = profile.current_level || 'A2';\nconst learningGoal = profile.learning_goal || 'conversational fluency';\nconst dailyMinutes = parseInt(profile.daily_minutes) || 15;\nconst focusAreas = profile.focus_areas || 'vocabulary,grammar,listening';\nconst interests = profile.interests || 'travel,food,culture';\nconst weaknesses = profile.known_weaknesses || 'none noted';\n\n// Streak and recent history from progress log\nconst sessions = progressRows.map(r => r.json).filter(r => r.date);\nsessions.sort((a, b) => new Date(b.date) - new Date(a.date));\n\nconst today = new Date();\ntoday.setHours(0, 0, 0, 0);\n\nlet streak = 0;\nlet checkDate = new Date(today);\nfor (const s of sessions) {\n  const sessionDate = new Date(s.date);\n  sessionDate.setHours(0, 0, 0, 0);\n  const diff = Math.floor((checkDate - sessionDate) / 86400000);\n  if (diff <= 1) { streak++; checkDate = sessionDate; }\n  else break;\n}\n\nconst totalSessions = sessions.length;\nconst recentTopics = sessions.slice(0, 10).map(s => s.topic).filter(Boolean);\nconst recentScores = sessions.slice(0, 10).map(s => parseFloat(s.score)).filter(n => !isNaN(n));\nconst avgScore = recentScores.length\n  ? (recentScores.reduce((a, b) => a + b, 0) / recentScores.length).toFixed(1)\n  : null;\n\n// Determine what to focus on today based on rotation\nconst focusRotation = focusAreas.split(',').map(f => f.trim());\nconst dayOfYear = Math.floor((today - new Date(today.getFullYear(), 0, 0)) / 86400000);\nconst todayFocus = focusRotation[dayOfYear % focusRotation.length];\n\nreturn [{\n  json: {\n    targetLanguage,\n    nativeLanguage,\n    level,\n    learningGoal,\n    dailyMinutes,\n    interests,\n    weaknesses,\n    todayFocus,\n    streak,\n    totalSessions,\n    recentTopics,\n    avgScore,\n    dateStr: today.toISOString().split('T')[0]\n  }\n}];"
+      },
+      "id": "c5a8b2e4-0004",
+      "name": "Build Learner Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 320]
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-5",
+        "options": { "temperature": 0.8, "maxTokens": 2000 },
+        "messages": {
+          "values": [
+            {
+              "content": "You are a warm, encouraging language coach who creates personalized daily language lessons. You know that consistency over time beats intensive cramming, so you design short, enjoyable sessions that respect the learner's stated time limit.\n\nYou adapt to their level, interests, and current focus area. You don't talk down to them. You make the content feel genuinely useful — phrases they'd actually say, grammar that unlocks real conversations, not textbook filler.\n\nYou always respond in valid JSON only. No markdown, no preamble, no backticks.",
+              "role": "system"
+            },
+            {
+              "content": "Create today's language lesson.\n\nLearner profile:\n- Learning: {{ $json.targetLanguage }} (native: {{ $json.nativeLanguage }})\n- Level: {{ $json.level }}\n- Goal: {{ $json.learningGoal }}\n- Today's focus: {{ $json.todayFocus }}\n- Available time: {{ $json.dailyMinutes }} minutes\n- Interests: {{ $json.interests }}\n- Known weaknesses: {{ $json.weaknesses }}\n- Streak: {{ $json.streak }} days\n- Recent topics covered: {{ $json.recentTopics.join(', ') || 'none yet' }}\n- Average recent quiz score: {{ $json.avgScore || 'not enough data' }}\n\nCreate a lesson that fits in {{ $json.dailyMinutes }} minutes.\n\nReturn this exact JSON structure:\n{\n  \"date\": \"{{ $json.dateStr }}\",\n  \"language\": \"{{ $json.targetLanguage }}\",\n  \"level\": \"{{ $json.level }}\",\n  \"focus\": \"{{ $json.todayFocus }}\",\n  \"lesson_title\": \"catchy short title for today's lesson\",\n  \"lesson_intro\": \"2 sentences explaining what they'll learn today and why it's useful for their specific goal\",\n  \"vocabulary\": [\n    {\n      \"word\": \"word in target language\",\n      \"pronunciation\": \"phonetic guide\",\n      \"translation\": \"meaning in native language\",\n      \"example_sentence\": \"example sentence in target language\",\n      \"example_translation\": \"translation of example\",\n      \"memory_tip\": \"a clever mnemonic or association\"\n    }\n  ],\n  \"grammar_point\": {\n    \"title\": \"grammar concept name\",\n    \"explanation\": \"clear plain-English explanation, under 60 words\",\n    \"examples\": [\n      { \"target\": \"sentence in target language\", \"native\": \"translation\" }\n    ],\n    \"common_mistake\": \"the error learners at this level often make\"\n  },\n  \"mini_dialogue\": {\n    \"context\": \"brief scene-setting sentence\",\n    \"lines\": [\n      { \"speaker\": \"A\", \"target\": \"line in target language\", \"native\": \"translation\" }\n    ]\n  },\n  \"quiz\": [\n    {\n      \"question\": \"quiz question\",\n      \"options\": [\"A) option\", \"B) option\", \"C) option\", \"D) option\"],\n      \"answer\": \"A\",\n      \"explanation\": \"why this is correct\"\n    }\n  ],\n  \"cultural_note\": \"one genuinely interesting cultural fact related to today's content or the learner's interests\",\n  \"streak_message\": \"a brief personalized encouragement referencing their {{ $json.streak }}-day streak (if 0, welcome them back)\",\n  \"tomorrow_preview\": \"one sentence teasing what tomorrow's focus will be\"\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "c5a8b2e4-0005",
+      "name": "Claude Lesson Generator",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [860, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const rawText = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\n\nlet lesson;\ntry {\n  const clean = rawText.replace(/```json|```/g, '').trim();\n  lesson = JSON.parse(clean);\n} catch(e) {\n  return [{ json: { error: 'Parse error', raw: rawText } }];\n}\n\nconst learner = $('Build Learner Context').first().json;\nlesson._meta = { streak: learner.streak, dailyMinutes: learner.dailyMinutes };\n\nreturn [{ json: lesson }];"
+      },
+      "id": "c5a8b2e4-0006",
+      "name": "Parse Lesson",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const l = $input.first().json;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst vocabCards = (l.vocabulary || []).map(v => `\n  <div style=\"background:#fafaf8;border:1px solid #e8e4df;border-radius:8px;padding:16px;margin-bottom:12px\">\n    <div style=\"display:flex;justify-content:space-between;align-items:baseline\">\n      <span style=\"font-size:20px;font-weight:700;color:#1a1a1a\">${esc(v.word)}</span>\n      <span style=\"font-size:13px;color:#999;font-family:monospace\">${esc(v.pronunciation)}</span>\n    </div>\n    <div style=\"color:#555;font-size:14px;margin:4px 0\">${esc(v.translation)}</div>\n    <div style=\"font-style:italic;color:#444;font-size:14px;margin-top:8px;border-left:3px solid #c8b89a;padding-left:10px\">\n      ${esc(v.example_sentence)}<br>\n      <span style=\"color:#888;font-size:13px\">${esc(v.example_translation)}</span>\n    </div>\n    <div style=\"background:#fff8e8;border-radius:4px;padding:6px 10px;margin-top:8px;font-size:12px;color:#7a5c00\">💡 ${esc(v.memory_tip)}</div>\n  </div>`).join('');\n\nconst dialogueLines = (l.mini_dialogue?.lines || []).map(line =>\n  `<div style=\"margin-bottom:8px\"><strong style=\"color:#555;font-size:12px\">${esc(line.speaker)}:</strong> <span style=\"font-size:14px\">${esc(line.target)}</span><br><span style=\"font-size:12px;color:#888\">${esc(line.native)}</span></div>`\n).join('');\n\nconst grammarExamples = (l.grammar_point?.examples || []).map(ex =>\n  `<div style=\"margin-bottom:6px;font-size:14px\">${esc(ex.target)} <span style=\"color:#888\">— ${esc(ex.native)}</span></div>`\n).join('');\n\nconst quizItems = (l.quiz || []).map((q, i) =>\n  `<div style=\"background:#f8f8f8;border-radius:6px;padding:14px;margin-bottom:10px\">\n    <div style=\"font-size:14px;font-weight:600;margin-bottom:8px\">${i+1}. ${esc(q.question)}</div>\n    <div style=\"font-size:13px;color:#555\">${(q.options||[]).map(o => `<div style=\"margin-bottom:3px\">${esc(o)}</div>`).join('')}</div>\n    <details style=\"margin-top:10px\"><summary style=\"font-size:12px;color:#2563eb;cursor:pointer\">Show answer</summary>\n      <div style=\"margin-top:6px;font-size:13px\"><strong>Answer: ${esc(q.answer)}</strong> — ${esc(q.explanation)}</div>\n    </details>\n  </div>`\n).join('');\n\nconst streakEmoji = l._meta?.streak > 0 ? '🔥' : '👋';\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<style>body{margin:0;padding:16px;background:#f4f0ea;font-family:Georgia,'Times New Roman',serif;color:#1a1a1a}a{color:#2563eb}</style>\n</head><body>\n<div style=\"max-width:600px;margin:0 auto\">\n  <div style=\"background:#2c3e50;color:#fff;padding:20px 24px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;letter-spacing:1px;text-transform:uppercase;color:#94a3b8;margin-bottom:4px\">${esc(l.language)} · ${esc(l.level)} · ${esc(l.focus)}</div>\n    <div style=\"font-size:19px;font-weight:700\">${esc(l.lesson_title)}</div>\n    <div style=\"margin-top:10px;font-size:12px;color:#94a3b8\">${streakEmoji} ${esc(l.streak_message)}</div>\n  </div>\n  <div style=\"background:#fff;padding:22px 24px;border-left:1px solid #e8e4df;border-right:1px solid #e8e4df\">\n    <p style=\"font-size:15px;line-height:1.7;color:#444;margin:0 0 20px\">${esc(l.lesson_intro)}</p>\n\n    <h2 style=\"font-size:14px;text-transform:uppercase;letter-spacing:0.5px;color:#888;margin:0 0 12px\">📚 Vocabulary</h2>\n    ${vocabCards}\n\n    <h2 style=\"font-size:14px;text-transform:uppercase;letter-spacing:0.5px;color:#888;margin:20px 0 12px\">⚙️ Grammar: ${esc(l.grammar_point?.title)}</h2>\n    <div style=\"font-size:14px;line-height:1.65;color:#444;margin-bottom:12px\">${esc(l.grammar_point?.explanation)}</div>\n    <div style=\"background:#f0f4ff;border-radius:6px;padding:14px;margin-bottom:8px\">${grammarExamples}</div>\n    <div style=\"background:#fff3f3;border-radius:6px;padding:10px 14px;font-size:13px;color:#b91c1c\">⚠️ Common mistake: ${esc(l.grammar_point?.common_mistake)}</div>\n\n    <h2 style=\"font-size:14px;text-transform:uppercase;letter-spacing:0.5px;color:#888;margin:20px 0 10px\">💬 Mini Dialogue</h2>\n    <div style=\"font-size:13px;color:#888;margin-bottom:10px;font-style:italic\">${esc(l.mini_dialogue?.context)}</div>\n    <div style=\"background:#f8faf8;border-radius:6px;padding:14px\">${dialogueLines}</div>\n\n    <h2 style=\"font-size:14px;text-transform:uppercase;letter-spacing:0.5px;color:#888;margin:20px 0 12px\">✏️ Quick Quiz</h2>\n    ${quizItems}\n\n    <div style=\"background:#f0f7ee;border-left:3px solid #4caf50;padding:14px;border-radius:0 6px 6px 0;margin-top:16px\">\n      <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:#388e3c;margin-bottom:4px\">Cultural Note</div>\n      <div style=\"font-size:14px;line-height:1.6\">${esc(l.cultural_note)}</div>\n    </div>\n  </div>\n  <div style=\"background:#2c3e50;color:#94a3b8;font-size:12px;padding:14px 24px;border-radius:0 0 10px 10px;display:flex;justify-content:space-between\">\n    <span>~${esc(String(l._meta?.dailyMinutes))} min lesson</span>\n    <span>${esc(l.tomorrow_preview)}</span>\n  </div>\n</div>\n</body></html>`;\n\nreturn [{ json: { html, lessonTitle: l.lesson_title, language: l.language, level: l.level, focus: l.focus, date: l.date } }];"
+      },
+      "id": "c5a8b2e4-0007",
+      "name": "Build Lesson Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 320]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$env.LEARNER_EMAIL}}",
+        "subject": "Your {{ $json.language }} lesson — {{ $json.lessonTitle }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "c5a8b2e4-0008",
+      "name": "Send Daily Lesson",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1520, 240],
+      "credentials": {
+        "smtp": { "id": "smtp-creds-01", "name": "SMTP Account" }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.LANG_SHEET_ID}}",
+        "sheetName": "Progress Log",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "date": "={{ $('Build Learner Context').first().json.dateStr }}",
+            "topic": "={{ $('Parse Lesson').first().json.lesson_title }}",
+            "focus": "={{ $('Parse Lesson').first().json.focus }}",
+            "language": "={{ $('Parse Lesson').first().json.language }}",
+            "sent_at": "={{ $now.toISO() }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "c5a8b2e4-0009",
+      "name": "Log Session",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [1520, 420],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily 7:30am": {
+      "main": [
+        [
+          { "node": "Load Learner Profile", "type": "main", "index": 0 },
+          { "node": "Load Progress Log", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Load Learner Profile": {
+      "main": [[{ "node": "Build Learner Context", "type": "main", "index": 0 }]]
+    },
+    "Load Progress Log": {
+      "main": [[{ "node": "Build Learner Context", "type": "main", "index": 0 }]]
+    },
+    "Build Learner Context": {
+      "main": [[{ "node": "Claude Lesson Generator", "type": "main", "index": 0 }]]
+    },
+    "Claude Lesson Generator": {
+      "main": [[{ "node": "Parse Lesson", "type": "main", "index": 0 }]]
+    },
+    "Parse Lesson": {
+      "main": [[{ "node": "Build Lesson Email", "type": "main", "index": 0 }]]
+    },
+    "Build Lesson Email": {
+      "main": [
+        [
+          { "node": "Send Daily Lesson", "type": "main", "index": 0 },
+          { "node": "Log Session", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": ["language-learning", "education", "personal", "daily"],
+  "triggerCount": 1,
+  "updatedAt": "2025-04-28T07:00:00.000Z",
+  "versionId": "v1.0.1"
+}
