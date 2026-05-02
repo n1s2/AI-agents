@@ -1,0 +1,305 @@
+{
+  "name": "Neighborhood Noise Complaint Logger & Escalation Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "noise-complaint",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "d2f1a9c3-0001",
+      "name": "Webhook – Log Complaint",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\n\nconst required = ['description', 'location', 'reporter_name'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) {\n  return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\n}\n\nconst noiseTypes = ['music', 'construction', 'party', 'dog_barking', 'vehicle', 'shouting', 'machinery', 'other'];\nconst noiseType = noiseTypes.includes(body.noise_type) ? body.noise_type : 'other';\n\nconst severityRaw = parseInt(body.severity) || 5;\nconst severity = Math.min(10, Math.max(1, severityRaw));\n\nreturn [{\n  json: {\n    valid: true,\n    reporterName: body.reporter_name.trim(),\n    reporterEmail: body.reporter_email || null,\n    location: body.location.trim(),\n    unit: body.unit || null,\n    description: body.description.trim().slice(0, 1500),\n    noiseType,\n    severity,\n    startTime: body.start_time || new Date().toISOString(),\n    ongoingNow: body.ongoing_now === true || body.ongoing_now === 'true',\n    previousComplaints: parseInt(body.previous_complaints) || 0,\n    loggedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "d2f1a9c3-0002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 320]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-v",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "d2f1a9c3-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [640, 320]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "d2f1a9c3-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [860, 480]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.COMPLAINTS_SHEET_ID}}",
+        "sheetName": "Complaints",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "logged_at": "={{ $json.loggedAt }}",
+            "reporter_name": "={{ $json.reporterName }}",
+            "reporter_email": "={{ $json.reporterEmail }}",
+            "location": "={{ $json.location }}",
+            "unit": "={{ $json.unit }}",
+            "noise_type": "={{ $json.noiseType }}",
+            "severity": "={{ $json.severity }}",
+            "description": "={{ $json.description }}",
+            "start_time": "={{ $json.startTime }}",
+            "ongoing_now": "={{ $json.ongoingNow }}",
+            "previous_complaints": "={{ $json.previousComplaints }}",
+            "status": "open"
+          }
+        },
+        "options": {}
+      },
+      "id": "d2f1a9c3-0005",
+      "name": "Save to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [860, 240],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.COMPLAINTS_SHEET_ID}}",
+        "sheetName": "Complaints",
+        "options": {}
+      },
+      "id": "d2f1a9c3-0006",
+      "name": "Load All Complaints",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [1060, 240],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const all = $input.all().map(r => r.json);\nconst current = $('Validate Input').first().json;\n\n// Complaints from same location in last 30 days\nconst cutoff = new Date();\ncutoff.setDate(cutoff.getDate() - 30);\n\nconst sameLocation = all.filter(c => {\n  const loc = (c.location || '').toLowerCase();\n  const curLoc = current.location.toLowerCase();\n  const logged = new Date(c.logged_at);\n  return loc.includes(curLoc.slice(0, 15)) && logged >= cutoff;\n});\n\nconst repeatCount = sameLocation.length;\nconst avgSeverity = sameLocation.length\n  ? (sameLocation.reduce((s, c) => s + (parseFloat(c.severity) || 0), 0) / sameLocation.length).toFixed(1)\n  : current.severity;\n\n// Escalation logic\nlet escalationLevel = 'none';\nif (current.severity >= 9 || (current.ongoingNow && current.severity >= 7)) {\n  escalationLevel = 'immediate';\n} else if (repeatCount >= 3 || current.severity >= 7) {\n  escalationLevel = 'building_manager';\n} else if (repeatCount >= 2 || current.severity >= 5) {\n  escalationLevel = 'warning_letter';\n}\n\nreturn [{\n  json: {\n    current,\n    repeatCount,\n    avgSeverity,\n    escalationLevel,\n    sameLocationHistory: sameLocation.slice(-5)\n  }\n}];"
+      },
+      "id": "d2f1a9c3-0007",
+      "name": "Analyse Pattern",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1280, 240]
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-5",
+        "options": { "temperature": 0.45, "maxTokens": 1000 },
+        "messages": {
+          "values": [
+            {
+              "content": "You help property managers and building committees handle noise complaints professionally. You write in two voices depending on the task:\n\n1. Acknowledgement to the reporter: warm, reassuring, specific about what happens next\n2. Formal notice to the offending party (when needed): firm, factual, non-threatening, legally neutral\n\nYou never editorialize or take sides emotionally. You're a professional neutral party. Always respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Process this noise complaint and generate the appropriate communications.\n\nComplaint details:\n- Reporter: {{ $json.current.reporterName }}\n- Location: {{ $json.current.location }}{{ $json.current.unit ? ', Unit ' + $json.current.unit : '' }}\n- Noise type: {{ $json.current.noiseType }}\n- Severity (1-10): {{ $json.current.severity }}\n- Ongoing right now: {{ $json.current.ongoingNow }}\n- Description: {{ $json.current.description }}\n- Logged at: {{ $json.current.loggedAt }}\n\nPattern analysis:\n- Complaints from this location in last 30 days: {{ $json.repeatCount }}\n- Average severity of those complaints: {{ $json.avgSeverity }}\n- Escalation level determined: {{ $json.escalationLevel }}\n\nGenerate this JSON:\n{\n  \"complaint_summary\": \"2-sentence neutral summary of the incident for internal records\",\n  \"risk_assessment\": \"one of: low | medium | high | critical\",\n  \"recommended_action\": \"what the property manager should do and why, in plain language, 2-3 sentences\",\n  \"reporter_acknowledgement\": {\n    \"subject\": \"email subject line\",\n    \"body\": \"email body to the reporter — acknowledge receipt, explain what happens next, give a reference number (use logged_at timestamp as ref), under 120 words\"\n  },\n  \"formal_notice_needed\": {{ $json.escalationLevel !== 'none' ? 'true' : 'false' }},\n  \"formal_notice\": {\n    \"subject\": \"formal notice subject line or null\",\n    \"body\": \"formal written notice to the offending unit/party if escalation_level is not none — factual, professional, references relevant building rules, under 200 words. null if no notice needed.\"\n  },\n  \"next_steps\": [\"step 1\", \"step 2\"]\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "d2f1a9c3-0008",
+      "name": "Claude Complaint Handler",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [1500, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet parsed;\ntry {\n  parsed = JSON.parse(raw.replace(/```json|```/g, '').trim());\n} catch(e) {\n  return [{ json: { error: 'Parse failed', raw } }];\n}\n\nconst pattern = $('Analyse Pattern').first().json;\nparsed._escalationLevel = pattern.escalationLevel;\nparsed._repeatCount = pattern.repeatCount;\nparsed._reporterEmail = pattern.current.reporterEmail;\nparsed._location = pattern.current.location;\nparsed._loggedAt = pattern.current.loggedAt;\n\nreturn [{ json: parsed }];"
+      },
+      "id": "d2f1a9c3-0009",
+      "name": "Parse Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1720, 240]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-email",
+              "leftValue": "={{ $json._reporterEmail }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "d2f1a9c3-0010",
+      "name": "Reporter Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1940, 180]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json._reporterEmail}}",
+        "subject": "={{$json.reporter_acknowledgement.subject}}",
+        "emailType": "text",
+        "message": "={{$json.reporter_acknowledgement.body}}"
+      },
+      "id": "d2f1a9c3-0011",
+      "name": "Acknowledge Reporter",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [2160, 120],
+      "credentials": {
+        "smtp": { "id": "smtp-creds-01", "name": "SMTP Account" }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-escalate",
+              "leftValue": "={{ $json.formal_notice_needed }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "d2f1a9c3-0012",
+      "name": "Needs Formal Notice?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1940, 360]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$env.MANAGER_EMAIL}}",
+        "subject": "[Noise Escalation] {{ $json.formal_notice.subject }}",
+        "emailType": "html",
+        "message": "<h3>Escalation Alert — {{ $json._escalationLevel }} level</h3><p><strong>Location:</strong> {{ $json._location }}<br><strong>Repeat complaints (30 days):</strong> {{ $json._repeatCount }}<br><strong>Risk:</strong> {{ $json.risk_assessment }}</p><hr><h4>Recommended Action</h4><p>{{ $json.recommended_action }}</p><hr><h4>Draft Formal Notice (ready to send)</h4><pre style='background:#f5f5f5;padding:12px;font-size:13px'>{{ $json.formal_notice.body }}</pre><hr><h4>Next Steps</h4><ul>{{ $json.next_steps.map(s => '<li>' + s + '</li>').join('') }}</ul>"
+      },
+      "id": "d2f1a9c3-0013",
+      "name": "Alert Manager",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [2160, 360],
+      "credentials": {
+        "smtp": { "id": "smtp-creds-01", "name": "SMTP Account" }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'logged', reference: $('Validate Input').first().json.loggedAt, escalation: $json._escalationLevel, risk: $json.risk_assessment, summary: $json.complaint_summary } }}"
+      },
+      "id": "d2f1a9c3-0014",
+      "name": "Return Confirmation",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2380, 240]
+    }
+  ],
+  "connections": {
+    "Webhook – Log Complaint": {
+      "main": [[{ "node": "Validate Input", "type": "main", "index": 0 }]]
+    },
+    "Validate Input": {
+      "main": [[{ "node": "Valid?", "type": "main", "index": 0 }]]
+    },
+    "Valid?": {
+      "main": [
+        [{ "node": "Save to Sheet", "type": "main", "index": 0 }],
+        [{ "node": "Return Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Save to Sheet": {
+      "main": [[{ "node": "Load All Complaints", "type": "main", "index": 0 }]]
+    },
+    "Load All Complaints": {
+      "main": [[{ "node": "Analyse Pattern", "type": "main", "index": 0 }]]
+    },
+    "Analyse Pattern": {
+      "main": [[{ "node": "Claude Complaint Handler", "type": "main", "index": 0 }]]
+    },
+    "Claude Complaint Handler": {
+      "main": [[{ "node": "Parse Response", "type": "main", "index": 0 }]]
+    },
+    "Parse Response": {
+      "main": [
+        [
+          { "node": "Reporter Email?", "type": "main", "index": 0 },
+          { "node": "Needs Formal Notice?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Reporter Email?": {
+      "main": [
+        [{ "node": "Acknowledge Reporter", "type": "main", "index": 0 }],
+        [{ "node": "Return Confirmation", "type": "main", "index": 0 }]
+      ]
+    },
+    "Acknowledge Reporter": {
+      "main": [[{ "node": "Return Confirmation", "type": "main", "index": 0 }]]
+    },
+    "Needs Formal Notice?": {
+      "main": [
+        [{ "node": "Alert Manager", "type": "main", "index": 0 }],
+        [{ "node": "Return Confirmation", "type": "main", "index": 0 }]
+      ]
+    },
+    "Alert Manager": {
+      "main": [[{ "node": "Return Confirmation", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": ["property", "complaints", "community", "escalation"],
+  "triggerCount": 0,
+  "updatedAt": "2025-04-28T11:00:00.000Z",
+  "versionId": "v1.0.0"
+}

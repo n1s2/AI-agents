@@ -1,0 +1,279 @@
+{
+  "name": "Personal Spending Coach Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "log-expense",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "e3b7d2f9-0001",
+      "name": "Webhook – Log Expense",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 280]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "weeksInterval": 1,
+              "triggerAtDay": [0],
+              "triggerAtHour": 8
+            }
+          ]
+        }
+      },
+      "id": "e3b7d2f9-0002",
+      "name": "Weekly Sunday Report",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [200, 460]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\n\nconst required = ['amount', 'category', 'description'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) {\n  return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\n}\n\nconst amount = parseFloat(body.amount);\nif (isNaN(amount) || amount <= 0) {\n  return [{ json: { valid: false, error: 'amount must be a positive number' } }];\n}\n\nconst validCategories = [\n  'food_dining', 'groceries', 'transport', 'entertainment',\n  'shopping', 'health', 'subscriptions', 'utilities',\n  'travel', 'education', 'personal_care', 'gifts', 'other'\n];\nconst category = validCategories.includes(body.category) ? body.category : 'other';\n\nreturn [{\n  json: {\n    valid: true,\n    mode: 'log',\n    amount,\n    currency: body.currency || 'USD',\n    category,\n    description: body.description.trim().slice(0, 200),\n    merchant: body.merchant || '',\n    isEssential: body.is_essential === true || body.is_essential === 'true',\n    note: body.note || '',\n    expenseDate: body.expense_date || new Date().toISOString().split('T')[0],\n    loggedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "e3b7d2f9-0003",
+      "name": "Validate Expense",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 280]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-valid",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "e3b7d2f9-0004",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [640, 280]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "e3b7d2f9-0005",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [860, 380]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.SPENDING_SHEET_ID}}",
+        "sheetName": "Expenses",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "expense_date": "={{ $json.expenseDate }}",
+            "amount": "={{ $json.amount }}",
+            "currency": "={{ $json.currency }}",
+            "category": "={{ $json.category }}",
+            "description": "={{ $json.description }}",
+            "merchant": "={{ $json.merchant }}",
+            "is_essential": "={{ $json.isEssential }}",
+            "note": "={{ $json.note }}",
+            "logged_at": "={{ $json.loggedAt }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "e3b7d2f9-0006",
+      "name": "Save Expense",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [860, 200],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.SPENDING_SHEET_ID}}",
+        "sheetName": "Expenses",
+        "options": {}
+      },
+      "id": "e3b7d2f9-0007",
+      "name": "Load All Expenses",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [420, 460],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Works for both the log mode (after saving) and the weekly report mode\nconst allRows = $('Load All Expenses').all().map(r => r.json);\nconst mode = $input.context?.['Validate Expense'] ? 'log' : 'weekly';\n\nconst now = new Date();\nconst startOfWeek = new Date(now);\nstartOfWeek.setDate(now.getDate() - now.getDay()); // Sunday\nstartOfWeek.setHours(0,0,0,0);\n\nconst startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);\nconst startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);\nconst endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0);\n\nfunction parseRows(rows, from, to) {\n  return rows.filter(r => {\n    const d = new Date(r.expense_date || r.logged_at);\n    return d >= from && (!to || d <= to);\n  }).map(r => ({\n    date: r.expense_date,\n    amount: parseFloat(r.amount) || 0,\n    category: r.category || 'other',\n    description: r.description || '',\n    merchant: r.merchant || '',\n    isEssential: r.is_essential === 'TRUE' || r.is_essential === true\n  }));\n}\n\nconst thisWeek = parseRows(allRows, startOfWeek);\nconst thisMonth = parseRows(allRows, startOfMonth);\nconst lastMonth = parseRows(allRows, startOfLastMonth, endOfLastMonth);\n\nfunction sumByCategory(expenses) {\n  const map = {};\n  for (const e of expenses) {\n    map[e.category] = (map[e.category] || 0) + e.amount;\n  }\n  return Object.entries(map)\n    .sort((a, b) => b[1] - a[1])\n    .map(([cat, total]) => ({ category: cat, total: parseFloat(total.toFixed(2)) }));\n}\n\nconst weekTotal = thisWeek.reduce((s, e) => s + e.amount, 0);\nconst monthTotal = thisMonth.reduce((s, e) => s + e.amount, 0);\nconst lastMonthTotal = lastMonth.reduce((s, e) => s + e.amount, 0);\nconst essentialPct = thisMonth.length\n  ? Math.round((thisMonth.filter(e => e.isEssential).reduce((s,e) => s+e.amount,0) / monthTotal) * 100)\n  : 0;\n\n// Top merchants this month\nconst merchantMap = {};\nfor (const e of thisMonth) {\n  if (e.merchant) merchantMap[e.merchant] = (merchantMap[e.merchant] || 0) + e.amount;\n}\nconst topMerchants = Object.entries(merchantMap)\n  .sort((a,b) => b[1]-a[1]).slice(0, 5)\n  .map(([m, t]) => ({ merchant: m, total: parseFloat(t.toFixed(2)) }));\n\n// Largest single expenses this week\nconst biggestThisWeek = [...thisWeek].sort((a,b) => b.amount - a.amount).slice(0, 3);\n\nreturn [{\n  json: {\n    mode: 'report',\n    weekTotal: parseFloat(weekTotal.toFixed(2)),\n    monthTotal: parseFloat(monthTotal.toFixed(2)),\n    lastMonthTotal: parseFloat(lastMonthTotal.toFixed(2)),\n    monthVsLastMonth: lastMonthTotal > 0\n      ? parseFloat(((monthTotal - lastMonthTotal) / lastMonthTotal * 100).toFixed(1))\n      : null,\n    essentialPct,\n    weekByCategory: sumByCategory(thisWeek),\n    monthByCategory: sumByCategory(thisMonth),\n    topMerchants,\n    biggestThisWeek,\n    transactionCountWeek: thisWeek.length,\n    transactionCountMonth: thisMonth.length,\n    currency: allRows[0]?.currency || 'USD',\n    reportDate: now.toISOString().split('T')[0]\n  }\n}];"
+      },
+      "id": "e3b7d2f9-0008",
+      "name": "Compute Spending Stats",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 460]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.SPENDING_SHEET_ID}}",
+        "sheetName": "Budget",
+        "options": {}
+      },
+      "id": "e3b7d2f9-0009",
+      "name": "Load Budget Targets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [860, 460],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const stats = $('Compute Spending Stats').first().json;\nconst budgetRows = $input.all().map(r => r.json);\n\n// Budget sheet: columns category | monthly_budget\nconst budgets = {};\nfor (const row of budgetRows) {\n  if (row.category && row.monthly_budget) {\n    budgets[row.category] = parseFloat(row.monthly_budget) || 0;\n  }\n}\n\n// Budget status per category\nconst budgetStatus = stats.monthByCategory.map(item => {\n  const budget = budgets[item.category] || null;\n  const pct = budget ? Math.round((item.total / budget) * 100) : null;\n  const over = budget && item.total > budget;\n  return { ...item, budget, pct, over };\n});\n\nconst totalBudget = Object.values(budgets).reduce((s, v) => s + v, 0);\nconst overBudgetCategories = budgetStatus.filter(b => b.over);\n\nreturn [{\n  json: {\n    ...stats,\n    budgets,\n    budgetStatus,\n    totalBudget,\n    overBudgetCategories\n  }\n}];"
+      },
+      "id": "e3b7d2f9-0010",
+      "name": "Merge Budget Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1060, 460]
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-5",
+        "options": { "temperature": 0.6, "maxTokens": 1000 },
+        "messages": {
+          "values": [
+            {
+              "content": "You are a direct, non-judgmental personal finance coach. You look at real spending data and give honest feedback — not generic advice like 'try cooking at home more'. You notice specific patterns, call out what's worth paying attention to, and give one or two concrete suggestions that are actually doable.\n\nYou're warm but you don't sugarcoat. If someone spent 40% over their food budget this week, you say that clearly. You don't moralize about it, but you don't pretend it didn't happen.\n\nKeep the whole analysis under 280 words. Write in flowing paragraphs, not bullet lists.",
+              "role": "system"
+            },
+            {
+              "content": "Here's my spending data. Write a weekly coaching note.\n\nWeek total: {{ $json.currency }} {{ $json.weekTotal }} across {{ $json.transactionCountWeek }} transactions\nMonth-to-date: {{ $json.currency }} {{ $json.monthTotal }}{{ $json.monthVsLastMonth !== null ? ' (' + ($json.monthVsLastMonth > 0 ? '+' : '') + $json.monthVsLastMonth + '% vs last month)' : '' }}\nTotal monthly budget: {{ $json.currency }} {{ $json.totalBudget || 'not set' }}\nEssential spending: {{ $json.essentialPct }}% of monthly spend\n\nSpending by category this week:\n{{ $json.weekByCategory.map(c => `${c.category}: ${$json.currency}${c.total}`).join('\\n') }}\n\nBudget status this month:\n{{ $json.budgetStatus.map(b => `${b.category}: spent ${$json.currency}${b.total}${b.budget ? ' / budget ' + $json.currency + b.budget + ' (' + b.pct + '%)' : ' (no budget set)'}`).join('\\n') }}\n\nTop merchants this month:\n{{ $json.topMerchants.map(m => `${m.merchant}: ${$json.currency}${m.total}`).join('\\n') }}\n\nBiggest transactions this week:\n{{ $json.biggestThisWeek.map(e => `${e.description}${e.merchant ? ' at ' + e.merchant : ''}: ${$json.currency}${e.amount}`).join('\\n') }}\n\nOver-budget categories: {{ $json.overBudgetCategories.length ? $json.overBudgetCategories.map(b => b.category).join(', ') : 'none' }}\n\nWrite the coaching note. Be specific about my actual numbers.",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "e3b7d2f9-0011",
+      "name": "Claude Spending Coach",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [1280, 460]
+    },
+    {
+      "parameters": {
+        "jsCode": "const coaching = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nconst d = $('Merge Budget Data').first().json;\n\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst catBar = (spent, budget) => {\n  if (!budget) return '';\n  const pct = Math.min(100, Math.round((spent / budget) * 100));\n  const color = pct >= 100 ? '#dc2626' : pct >= 80 ? '#d97706' : '#16a34a';\n  return `<div style=\"background:#f0f0f0;border-radius:4px;height:6px;margin-top:4px\"><div style=\"background:${color};width:${pct}%;height:6px;border-radius:4px\"></div></div>`;\n};\n\nconst categoryRows = d.budgetStatus.map(b => `\n  <div style=\"padding:10px 0;border-bottom:1px solid #f0f0f0\">\n    <div style=\"display:flex;justify-content:space-between;font-size:14px\">\n      <span style=\"color:#333\">${esc(b.category.replace(/_/g,' '))}</span>\n      <span style=\"color:${b.over ? '#dc2626' : '#333'};font-weight:${b.over ? '600' : '400'}\">\n        ${esc(d.currency)}${b.total.toFixed(2)}${b.budget ? ` / ${esc(d.currency)}${b.budget}` : ''}\n      </span>\n    </div>\n    ${catBar(b.total, b.budget)}\n  </div>`).join('');\n\nconst coachingHtml = coaching\n  .replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>')\n  .replace(/\\n\\n/g, '</p><p style=\"margin:0 0 12px\">')\n  .replace(/\\n/g, '<br>');\n\nconst trendArrow = d.monthVsLastMonth !== null\n  ? (d.monthVsLastMonth > 0 ? `<span style=\"color:#dc2626\">↑${d.monthVsLastMonth}%</span>` : `<span style=\"color:#16a34a\">↓${Math.abs(d.monthVsLastMonth)}%</span>`)\n  : '';\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f7f7f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#1a1a1a\">\n<div style=\"max-width:580px;margin:0 auto\">\n  <div style=\"background:#1a1a2e;color:#fff;padding:20px 24px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;letter-spacing:1px;text-transform:uppercase;color:#8888aa;margin-bottom:4px\">Weekly Spending Report</div>\n    <div style=\"font-size:22px;font-weight:700\">${esc(d.currency)} ${d.weekTotal.toFixed(2)} <span style=\"font-size:14px;font-weight:400;color:#aaa\">this week</span></div>\n    <div style=\"margin-top:6px;font-size:13px;color:#aaa\">${esc(d.currency)} ${d.monthTotal.toFixed(2)} month-to-date ${trendArrow}</div>\n  </div>\n\n  <div style=\"background:#fff;padding:20px 24px;border-left:1px solid #eee;border-right:1px solid #eee\">\n    <div style=\"font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#888;margin-bottom:4px\">Coach's Note</div>\n    <p style=\"margin:0 0 12px;font-size:15px;line-height:1.7;color:#333\">${coachingHtml}</p>\n  </div>\n\n  <div style=\"background:#fff;padding:20px 24px;border-left:1px solid #eee;border-right:1px solid #eee;border-top:4px solid #f0f0f0\">\n    <div style=\"font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#888;margin-bottom:8px\">Categories — month to date</div>\n    ${categoryRows}\n  </div>\n\n  ${d.topMerchants.length ? `<div style=\"background:#fff;padding:20px 24px;border-left:1px solid #eee;border-right:1px solid #eee;border-top:4px solid #f0f0f0\">\n    <div style=\"font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#888;margin-bottom:8px\">Top merchants this month</div>\n    ${d.topMerchants.map(m => `<div style=\"display:flex;justify-content:space-between;font-size:14px;padding:6px 0;border-bottom:1px solid #f8f8f8\"><span>${esc(m.merchant)}</span><span>${esc(d.currency)}${m.total.toFixed(2)}</span></div>`).join('')}\n  </div>` : ''}\n\n  <div style=\"background:#1a1a2e;color:#666;font-size:11px;padding:12px 24px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Personal Spending Coach · ${d.reportDate} · ${d.transactionCountMonth} transactions logged this month\n  </div>\n</div>\n</body></html>`;\n\nreturn [{ json: { html, weekTotal: d.weekTotal, currency: d.currency, overCount: d.overBudgetCategories.length } }];"
+      },
+      "id": "e3b7d2f9-0012",
+      "name": "Build Report Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1500, 460]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$env.USER_EMAIL}}",
+        "subject": "Your weekly spend: {{ $json.currency }} {{ $json.weekTotal }}{{ $json.overCount > 0 ? ' — ' + $json.overCount + ' categories over budget' : '' }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "e3b7d2f9-0013",
+      "name": "Send Weekly Report",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1720, 460],
+      "credentials": {
+        "smtp": { "id": "smtp-creds-01", "name": "SMTP Account" }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'saved', category: $('Validate Expense').first().json.category, amount: $('Validate Expense').first().json.amount, currency: $('Validate Expense').first().json.currency } }}"
+      },
+      "id": "e3b7d2f9-0014",
+      "name": "Return Save Confirmation",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1060, 200]
+    }
+  ],
+  "connections": {
+    "Webhook – Log Expense": {
+      "main": [[{ "node": "Validate Expense", "type": "main", "index": 0 }]]
+    },
+    "Validate Expense": {
+      "main": [[{ "node": "Valid?", "type": "main", "index": 0 }]]
+    },
+    "Valid?": {
+      "main": [
+        [{ "node": "Save Expense", "type": "main", "index": 0 }],
+        [{ "node": "Return Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Save Expense": {
+      "main": [[{ "node": "Return Save Confirmation", "type": "main", "index": 0 }]]
+    },
+    "Weekly Sunday Report": {
+      "main": [[{ "node": "Load All Expenses", "type": "main", "index": 0 }]]
+    },
+    "Load All Expenses": {
+      "main": [[{ "node": "Compute Spending Stats", "type": "main", "index": 0 }]]
+    },
+    "Compute Spending Stats": {
+      "main": [[{ "node": "Load Budget Targets", "type": "main", "index": 0 }]]
+    },
+    "Load Budget Targets": {
+      "main": [[{ "node": "Merge Budget Data", "type": "main", "index": 0 }]]
+    },
+    "Merge Budget Data": {
+      "main": [[{ "node": "Claude Spending Coach", "type": "main", "index": 0 }]]
+    },
+    "Claude Spending Coach": {
+      "main": [[{ "node": "Build Report Email", "type": "main", "index": 0 }]]
+    },
+    "Build Report Email": {
+      "main": [[{ "node": "Send Weekly Report", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": ["finance", "personal", "budgeting", "weekly"],
+  "triggerCount": 1,
+  "updatedAt": "2025-04-29T08:00:00.000Z",
+  "versionId": "v1.2.0"
+}

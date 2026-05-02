@@ -1,0 +1,291 @@
+{
+  "name": "Job Application Tracker & Follow-up Coach",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "track-application",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "f6c2e8a1-0001",
+      "name": "Webhook – Log Application",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 260]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 8,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "f6c2e8a1-0002",
+      "name": "Daily 8am Check",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [200, 480]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\n\nconst required = ['company', 'role', 'applied_date'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) {\n  return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\n}\n\nconst validStatuses = ['applied', 'phone_screen', 'interview', 'final_round', 'offer', 'rejected', 'ghosted', 'withdrawn'];\nconst status = validStatuses.includes(body.status) ? body.status : 'applied';\n\nreturn [{\n  json: {\n    valid: true,\n    mode: 'log',\n    applicationId: `${body.company.toLowerCase().replace(/\\s+/g,'-')}-${Date.now()}`,\n    company: body.company.trim(),\n    role: body.role.trim(),\n    appliedDate: body.applied_date,\n    status,\n    jobUrl: body.job_url || '',\n    salaryRange: body.salary_range || '',\n    location: body.location || '',\n    remotePolicy: body.remote_policy || '',\n    contactName: body.contact_name || '',\n    contactEmail: body.contact_email || '',\n    notes: (body.notes || '').slice(0, 800),\n    excitement: Math.min(10, Math.max(1, parseInt(body.excitement) || 5)),\n    source: body.source || '',\n    loggedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "f6c2e8a1-0003",
+      "name": "Validate Application",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 260]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-v",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "f6c2e8a1-0004",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [640, 260]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "f6c2e8a1-0005",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [860, 360]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.JOBS_SHEET_ID}}",
+        "sheetName": "Applications",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "application_id": "={{ $json.applicationId }}",
+            "company": "={{ $json.company }}",
+            "role": "={{ $json.role }}",
+            "applied_date": "={{ $json.appliedDate }}",
+            "status": "={{ $json.status }}",
+            "job_url": "={{ $json.jobUrl }}",
+            "salary_range": "={{ $json.salaryRange }}",
+            "location": "={{ $json.location }}",
+            "remote_policy": "={{ $json.remotePolicy }}",
+            "contact_name": "={{ $json.contactName }}",
+            "contact_email": "={{ $json.contactEmail }}",
+            "notes": "={{ $json.notes }}",
+            "excitement": "={{ $json.excitement }}",
+            "source": "={{ $json.source }}",
+            "logged_at": "={{ $json.loggedAt }}",
+            "follow_up_count": 0,
+            "last_follow_up": ""
+          }
+        },
+        "options": {}
+      },
+      "id": "f6c2e8a1-0006",
+      "name": "Save Application",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [860, 200],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'saved', application_id: $('Validate Application').first().json.applicationId, company: $('Validate Application').first().json.company, role: $('Validate Application').first().json.role } }}"
+      },
+      "id": "f6c2e8a1-0007",
+      "name": "Confirm Saved",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1080, 200]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.JOBS_SHEET_ID}}",
+        "sheetName": "Applications",
+        "options": {}
+      },
+      "id": "f6c2e8a1-0008",
+      "name": "Load All Applications",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [420, 480],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const apps = $input.all().map(r => r.json);\nconst today = new Date();\ntoday.setHours(0, 0, 0, 0);\n\nconst activeStatuses = ['applied', 'phone_screen', 'interview', 'final_round'];\n\nconst active = apps.filter(a => activeStatuses.includes(a.status));\nconst needsFollowUp = [];\nconst stale = [];\nconst recentWins = [];\nconst recentLosses = [];\n\nfor (const app of active) {\n  const appliedDate = new Date(app.applied_date);\n  const lastFollowUp = app.last_follow_up ? new Date(app.last_follow_up) : null;\n  const daysSinceApplied = Math.floor((today - appliedDate) / 86400000);\n  const daysSinceFollowUp = lastFollowUp\n    ? Math.floor((today - lastFollowUp) / 86400000)\n    : daysSinceApplied;\n\n  // Follow up after 7 days if applied, 5 days if in interview process\n  const followUpThreshold = app.status === 'applied' ? 7 : 5;\n\n  if (daysSinceFollowUp >= followUpThreshold && parseInt(app.follow_up_count || 0) < 2) {\n    needsFollowUp.push({\n      ...app,\n      daysSinceApplied,\n      daysSinceFollowUp,\n      followUpCount: parseInt(app.follow_up_count || 0)\n    });\n  }\n\n  if (daysSinceApplied >= 21 && app.status === 'applied') {\n    stale.push({ ...app, daysSinceApplied });\n  }\n}\n\n// Recent outcomes (last 14 days)\nconst cutoff = new Date(today);\ncutoff.setDate(cutoff.getDate() - 14);\nfor (const app of apps) {\n  const logged = new Date(app.logged_at);\n  if (logged >= cutoff) {\n    if (app.status === 'offer') recentWins.push(app);\n    if (app.status === 'rejected' || app.status === 'ghosted') recentLosses.push(app);\n  }\n}\n\n// Pipeline summary\nconst byStatus = {};\nfor (const a of apps) {\n  byStatus[a.status] = (byStatus[a.status] || 0) + 1;\n}\n\nconst responseRate = apps.length > 0\n  ? Math.round((apps.filter(a => a.status !== 'applied').length / apps.length) * 100)\n  : 0;\n\nreturn [{\n  json: {\n    needsFollowUp: needsFollowUp.slice(0, 5),\n    stale,\n    recentWins,\n    recentLosses,\n    byStatus,\n    totalActive: active.length,\n    totalApplications: apps.length,\n    responseRate,\n    today: today.toISOString().split('T')[0]\n  }\n}];"
+      },
+      "id": "f6c2e8a1-0009",
+      "name": "Analyse Pipeline",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 480]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-any",
+              "leftValue": "={{ $json.needsFollowUp.length + $json.stale.length }}",
+              "rightValue": 0,
+              "operator": { "type": "number", "operation": "gt" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "f6c2e8a1-0010",
+      "name": "Action Needed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [860, 480]
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-5",
+        "options": { "temperature": 0.55, "maxTokens": 1200 },
+        "messages": {
+          "values": [
+            {
+              "content": "You help job seekers manage their application pipeline. You do two things:\n\n1. Write follow-up emails that are short, professional, and human — not desperate or overly formal. Different tone for 'just checking in after applying' vs 'following up after an interview'.\n\n2. Give a frank 3-4 sentence pipeline assessment: what's the overall state of the search, what's worth prioritizing, and one honest observation about the pattern (e.g. good volume but low response rate, lots of rejections after first round, applications skewed heavily toward one company type).\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Review my job search pipeline and generate follow-up emails.\n\nPipeline overview:\n- Total applications: {{ $json.totalApplications }}\n- Active (not yet resolved): {{ $json.totalActive }}\n- Response rate: {{ $json.responseRate }}%\n- Status breakdown: {{ Object.entries($json.byStatus).map(([s,c]) => `${s}: ${c}`).join(', ') }}\n\nApplications needing follow-up ({{ $json.needsFollowUp.length }}):\n{{ $json.needsFollowUp.map(a => `- ${a.company} / ${a.role} | Applied: ${a.applied_date} | Status: ${a.status} | Days since last action: ${a.daysSinceFollowUp} | Follow-ups sent: ${a.followUpCount} | Contact: ${a.contact_name || 'unknown'} | Notes: ${a.notes || 'none'}`).join('\\n') }}\n\nStale applications (21+ days, no movement) ({{ $json.stale.length }}):\n{{ $json.stale.map(a => `- ${a.company} / ${a.role} | Applied: ${a.applied_date} | ${a.daysSinceApplied} days ago`).join('\\n') || 'none' }}\n\nRecent wins: {{ $json.recentWins.map(a => `${a.company}`).join(', ') || 'none' }}\nRecent rejections/ghosts: {{ $json.recentLosses.map(a => `${a.company}`).join(', ') || 'none' }}\n\nGenerate this JSON:\n{\n  \"pipeline_assessment\": \"3-4 sentence frank assessment of the search — what's the state, what to prioritize, one honest pattern observation\",\n  \"follow_up_emails\": [\n    {\n      \"application_id\": \"...\",\n      \"company\": \"...\",\n      \"role\": \"...\",\n      \"subject\": \"email subject\",\n      \"body\": \"email body — short, professional, human, under 100 words. Address to contact_name if known, otherwise generic opener.\",\n      \"urgency\": \"low | medium | high\"\n    }\n  ],\n  \"stale_recommendation\": \"what to do with the stale applications — mark as ghosted, one final email, or something else. One sentence per application or a general recommendation.\",\n  \"one_thing_to_do_today\": \"the single most impactful action to take today in this job search\"\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "f6c2e8a1-0011",
+      "name": "Claude Pipeline Coach",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [1080, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet parsed;\ntry {\n  parsed = JSON.parse(raw.replace(/```json|```/g, '').trim());\n} catch(e) {\n  return [{ json: { error: 'Parse failed', raw } }];\n}\n\nconst pipeline = $('Analyse Pipeline').first().json;\nparsed._pipeline = pipeline;\n\nreturn [{ json: parsed }];"
+      },
+      "id": "f6c2e8a1-0012",
+      "name": "Parse Coach Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nconst p = d._pipeline;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst urgencyColor = { high: '#dc2626', medium: '#d97706', low: '#6b7280' };\n\nconst emailCards = (d.follow_up_emails || []).map(e => `\n  <div style=\"border:1px solid #e8e4df;border-radius:8px;margin-bottom:16px;overflow:hidden\">\n    <div style=\"background:#f8f6f3;padding:10px 16px;display:flex;justify-content:space-between;align-items:center\">\n      <div><strong style=\"font-size:14px\">${esc(e.company)}</strong> <span style=\"color:#888;font-size:13px\">— ${esc(e.role)}</span></div>\n      <span style=\"font-size:11px;font-weight:600;color:${urgencyColor[e.urgency] || '#888'};text-transform:uppercase\">${esc(e.urgency)}</span>\n    </div>\n    <div style=\"padding:14px 16px\">\n      <div style=\"font-size:12px;color:#888;margin-bottom:4px\">Subject: ${esc(e.subject)}</div>\n      <div style=\"font-size:14px;line-height:1.65;white-space:pre-wrap;color:#333\">${esc(e.body)}</div>\n    </div>\n  </div>`).join('');\n\nconst statusOrder = ['applied','phone_screen','interview','final_round','offer','rejected','ghosted','withdrawn'];\nconst statusLabels = { applied:'Applied', phone_screen:'Phone Screen', interview:'Interview', final_round:'Final Round', offer:'Offer 🎉', rejected:'Rejected', ghosted:'Ghosted', withdrawn:'Withdrawn' };\nconst pipelineRows = statusOrder\n  .filter(s => p.byStatus[s])\n  .map(s => `<div style=\"display:flex;justify-content:space-between;font-size:13px;padding:5px 0;border-bottom:1px solid #f0f0f0\"><span style=\"color:#555\">${statusLabels[s]||s}</span><span style=\"font-weight:600\">${p.byStatus[s]}</span></div>`)\n  .join('');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f5f5f3;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#1a1a1a\">\n<div style=\"max-width:620px;margin:0 auto\">\n  <div style=\"background:#18181b;color:#fff;padding:20px 24px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;letter-spacing:1px;text-transform:uppercase;color:#71717a;margin-bottom:4px\">Job Search · Daily Update</div>\n    <div style=\"font-size:19px;font-weight:700\">${p.totalApplications} applications · ${p.totalActive} active · ${p.responseRate}% response rate</div>\n    <div style=\"margin-top:6px;font-size:13px;color:#a1a1aa\">${p.today}</div>\n  </div>\n\n  <div style=\"background:#fff;padding:20px 24px;border-left:1px solid #eee;border-right:1px solid #eee\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#888;margin-bottom:8px\">Pipeline Assessment</div>\n    <p style=\"margin:0 0 16px;font-size:15px;line-height:1.7;color:#333\">${esc(d.pipeline_assessment)}</p>\n    <div style=\"background:#f0f7ff;border-left:3px solid #2563eb;padding:12px 16px;border-radius:0 6px 6px 0;font-size:14px\">\n      <strong>Today's priority:</strong> ${esc(d.one_thing_to_do_today)}\n    </div>\n  </div>\n\n  <div style=\"background:#fff;padding:20px 24px;border:1px solid #eee;border-top:4px solid #f0f0f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#888;margin-bottom:12px\">Pipeline breakdown</div>\n    ${pipelineRows}\n  </div>\n\n  ${emailCards ? `<div style=\"background:#fff;padding:20px 24px;border:1px solid #eee;border-top:4px solid #f0f0f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#888;margin-bottom:14px\">Follow-up drafts (${(d.follow_up_emails||[]).length})</div>\n    ${emailCards}\n  </div>` : ''}\n\n  ${d.stale_recommendation ? `<div style=\"background:#fff8ed;padding:14px 24px;border:1px solid #fde8b0;font-size:14px;line-height:1.6\">\n    <strong>Stale applications:</strong> ${esc(d.stale_recommendation)}\n  </div>` : ''}\n\n  <div style=\"background:#18181b;color:#555;font-size:11px;padding:12px 24px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Job Application Tracker · ${p.today}\n  </div>\n</div>\n</body></html>`;\n\nreturn [{ json: { html, followUpCount: (d.follow_up_emails||[]).length, activeCount: p.totalActive } }];"
+      },
+      "id": "f6c2e8a1-0013",
+      "name": "Build Daily Digest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1520, 400]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$env.USER_EMAIL}}",
+        "subject": "Job search update — {{ $json.activeCount }} active, {{ $json.followUpCount }} follow-ups ready",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "f6c2e8a1-0014",
+      "name": "Send Daily Digest",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1740, 400],
+      "credentials": {
+        "smtp": { "id": "smtp-creds-01", "name": "SMTP Account" }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook – Log Application": {
+      "main": [[{ "node": "Validate Application", "type": "main", "index": 0 }]]
+    },
+    "Validate Application": {
+      "main": [[{ "node": "Valid?", "type": "main", "index": 0 }]]
+    },
+    "Valid?": {
+      "main": [
+        [{ "node": "Save Application", "type": "main", "index": 0 }],
+        [{ "node": "Return Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Save Application": {
+      "main": [[{ "node": "Confirm Saved", "type": "main", "index": 0 }]]
+    },
+    "Daily 8am Check": {
+      "main": [[{ "node": "Load All Applications", "type": "main", "index": 0 }]]
+    },
+    "Load All Applications": {
+      "main": [[{ "node": "Analyse Pipeline", "type": "main", "index": 0 }]]
+    },
+    "Analyse Pipeline": {
+      "main": [[{ "node": "Action Needed?", "type": "main", "index": 0 }]]
+    },
+    "Action Needed?": {
+      "main": [
+        [{ "node": "Claude Pipeline Coach", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Claude Pipeline Coach": {
+      "main": [[{ "node": "Parse Coach Output", "type": "main", "index": 0 }]]
+    },
+    "Parse Coach Output": {
+      "main": [[{ "node": "Build Daily Digest", "type": "main", "index": 0 }]]
+    },
+    "Build Daily Digest": {
+      "main": [[{ "node": "Send Daily Digest", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": ["jobs", "career", "tracking", "follow-up"],
+  "triggerCount": 1,
+  "updatedAt": "2025-04-29T10:00:00.000Z",
+  "versionId": "v1.0.2"
+}
