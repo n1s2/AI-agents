@@ -1,0 +1,290 @@
+{
+  "name": "Tenant Maintenance Request Router",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "maintenance-request",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a1c4e7f2-0001",
+      "name": "Webhook – Submit Request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\n\nconst required = ['tenant_name', 'unit', 'description'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) {\n  return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\n}\n\nreturn [{\n  json: {\n    valid: true,\n    ticketId: `MR-${Date.now()}`,\n    tenantName: body.tenant_name.trim(),\n    tenantEmail: body.tenant_email || null,\n    tenantPhone: body.tenant_phone || null,\n    unit: body.unit.trim(),\n    building: body.building || $env.DEFAULT_BUILDING || 'Main Building',\n    description: body.description.trim().slice(0, 1500),\n    category: body.category || null,\n    photoUrls: Array.isArray(body.photo_urls) ? body.photo_urls.slice(0, 4) : [],\n    preferredTimeSlot: body.preferred_time_slot || 'any',\n    entryPermission: body.entry_permission !== false,\n    submittedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "a1c4e7f2-0002",
+      "name": "Validate & Enrich",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 320]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-v",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "a1c4e7f2-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [640, 320]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "a1c4e7f2-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [860, 460]
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-5",
+        "options": { "temperature": 0.2, "maxTokens": 900 },
+        "messages": {
+          "values": [
+            {
+              "content": "You are a property maintenance triage system. Your job is to read a tenant's maintenance request description and extract structured information about it. Be precise and conservative — if you're not sure about something, say so rather than guessing.\n\nYou categorize, assess urgency, identify the right trade, flag safety risks, and estimate scope. Always respond with valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Triage this maintenance request.\n\nUnit: {{ $json.unit }}\nBuilding: {{ $json.building }}\nTenant-provided category (may be blank): {{ $json.category || 'not specified' }}\nDescription: {{ $json.description }}\nEntry permission granted: {{ $json.entryPermission }}\nPreferred time: {{ $json.preferredTimeSlot }}\n\nReturn this JSON:\n{\n  \"category\": \"one of: plumbing | electrical | hvac | appliance | structural | pest | locksmith | cleaning | general_repair | landscaping | other\",\n  \"urgency\": \"one of: emergency | high | medium | low\",\n  \"urgency_reason\": \"one sentence explaining why this urgency level\",\n  \"safety_risk\": true or false,\n  \"safety_detail\": \"if safety_risk is true, describe the specific risk in one sentence. null otherwise.\",\n  \"assigned_trade\": \"who should handle this: plumber | electrician | hvac_tech | handyman | pest_control | locksmith | building_manager | cleaning_crew | contractor\",\n  \"estimated_scope\": \"one of: minor_repair | moderate_repair | major_repair | replacement | investigation_needed\",\n  \"tenant_acknowledgement\": \"a brief, warm message to send the tenant (2-3 sentences). Confirm receipt, state the urgency level and what happens next, give ticket ID {{ $json.ticketId }}. Don't overpromise timelines unless you're certain.\",\n  \"internal_notes\": \"what the assigned trade should know before arriving — anything specific from the description that affects diagnosis or preparation, under 80 words.\",\n  \"suggested_questions\": [\"any clarifying questions the manager might want to ask the tenant before dispatching, if the description is ambiguous. Empty array if clear enough.\"]\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "a1c4e7f2-0005",
+      "name": "Claude Triage Engine",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [860, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet triage;\ntry {\n  triage = JSON.parse(raw.replace(/```json|```/g, '').trim());\n} catch(e) {\n  return [{ json: { error: 'Triage parse failed', raw } }];\n}\n\nconst req = $('Validate & Enrich').first().json;\n\nreturn [{\n  json: {\n    ...triage,\n    ticketId: req.ticketId,\n    tenantName: req.tenantName,\n    tenantEmail: req.tenantEmail,\n    tenantPhone: req.tenantPhone,\n    unit: req.unit,\n    building: req.building,\n    description: req.description,\n    preferredTimeSlot: req.preferredTimeSlot,\n    entryPermission: req.entryPermission,\n    photoUrls: req.photoUrls,\n    submittedAt: req.submittedAt\n  }\n}];"
+      },
+      "id": "a1c4e7f2-0006",
+      "name": "Merge Triage + Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 240]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.MAINTENANCE_SHEET_ID}}",
+        "sheetName": "Requests",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "ticket_id": "={{ $json.ticketId }}",
+            "submitted_at": "={{ $json.submittedAt }}",
+            "tenant_name": "={{ $json.tenantName }}",
+            "tenant_email": "={{ $json.tenantEmail }}",
+            "tenant_phone": "={{ $json.tenantPhone }}",
+            "unit": "={{ $json.unit }}",
+            "building": "={{ $json.building }}",
+            "description": "={{ $json.description }}",
+            "category": "={{ $json.category }}",
+            "urgency": "={{ $json.urgency }}",
+            "safety_risk": "={{ $json.safety_risk }}",
+            "assigned_trade": "={{ $json.assigned_trade }}",
+            "estimated_scope": "={{ $json.estimated_scope }}",
+            "entry_permission": "={{ $json.entryPermission }}",
+            "preferred_time": "={{ $json.preferredTimeSlot }}",
+            "status": "open",
+            "internal_notes": "={{ $json.internal_notes }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "a1c4e7f2-0007",
+      "name": "Save to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [1300, 240],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-emergency",
+              "leftValue": "={{ $json.urgency }}",
+              "rightValue": "emergency",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "a1c4e7f2-0008",
+      "name": "Emergency?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1520, 160]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$env.MANAGER_EMAIL}}",
+        "subject": "🚨 EMERGENCY Maintenance – {{ $json.unit }} {{ $json.building }} – {{ $json.ticketId }}",
+        "emailType": "html",
+        "message": "<div style='font-family:sans-serif;max-width:600px'><div style='background:#dc2626;color:#fff;padding:16px 20px;border-radius:6px 6px 0 0'><h2 style='margin:0;font-size:18px'>🚨 Emergency Maintenance Request</h2><div style='font-size:13px;opacity:0.85;margin-top:4px'>{{ $json.ticketId }} · {{ $json.building }}, Unit {{ $json.unit }}</div></div><div style='background:#fff;border:1px solid #eee;padding:20px'><p><strong>Tenant:</strong> {{ $json.tenantName }}{{ $json.tenantPhone ? ' · ' + $json.tenantPhone : '' }}</p><p><strong>Description:</strong> {{ $json.description }}</p>{{ $json.safety_detail ? '<div style=\"background:#fef2f2;border-left:4px solid #dc2626;padding:10px 14px;margin:12px 0\"><strong>Safety risk:</strong> ' + $json.safety_detail + '</div>' : '' }}<p><strong>Assigned trade:</strong> {{ $json.assigned_trade }}</p><p><strong>Internal notes for trade:</strong> {{ $json.internal_notes }}</p><p><strong>Entry permission:</strong> {{ $json.entryPermission ? 'Granted' : 'NOT granted – contact tenant first' }}</p>{{ $json.suggestedQuestions && $json.suggested_questions.length ? '<p><strong>Clarifying questions:</strong> ' + $json.suggested_questions.join('; ') + '</p>' : '' }}</div></div>"
+      },
+      "id": "a1c4e7f2-0009",
+      "name": "Alert Manager – Emergency",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1740, 100],
+      "credentials": {
+        "smtp": { "id": "smtp-creds-01", "name": "SMTP Account" }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$env.MANAGER_EMAIL}}",
+        "subject": "[{{ $json.urgency | upper }}] Maintenance Request – {{ $json.unit }} – {{ $json.category }} – {{ $json.ticketId }}",
+        "emailType": "html",
+        "message": "<div style='font-family:sans-serif;max-width:600px'><div style='background:#1e293b;color:#fff;padding:16px 20px;border-radius:6px 6px 0 0'><h2 style='margin:0;font-size:17px'>Maintenance Request — {{ $json.urgency | upper }}</h2><div style='font-size:13px;opacity:0.7;margin-top:4px'>{{ $json.ticketId }} · {{ $json.building }}, Unit {{ $json.unit }}</div></div><div style='background:#fff;border:1px solid #eee;padding:20px;font-size:14px;line-height:1.7'><p><strong>Tenant:</strong> {{ $json.tenantName }}{{ $json.tenantEmail ? ' · ' + $json.tenantEmail : '' }}{{ $json.tenantPhone ? ' · ' + $json.tenantPhone : '' }}</p><p><strong>Category:</strong> {{ $json.category }} | <strong>Scope:</strong> {{ $json.estimated_scope }} | <strong>Trade:</strong> {{ $json.assigned_trade }}</p><p><strong>Description:</strong> {{ $json.description }}</p><p><strong>Internal notes:</strong> {{ $json.internal_notes }}</p><p><strong>Entry permission:</strong> {{ $json.entryPermission ? 'Granted' : 'NOT granted' }} | <strong>Preferred time:</strong> {{ $json.preferredTimeSlot }}</p>{{ $json.suggested_questions && $json.suggested_questions.length ? '<p><strong>Suggested questions before dispatch:</strong><br>' + $json.suggested_questions.map(q => '• ' + q).join('<br>') + '</p>' : '' }}</div></div>"
+      },
+      "id": "a1c4e7f2-0010",
+      "name": "Alert Manager – Standard",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1740, 280],
+      "credentials": {
+        "smtp": { "id": "smtp-creds-01", "name": "SMTP Account" }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-tenant-email",
+              "leftValue": "={{ $json.tenantEmail }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "a1c4e7f2-0011",
+      "name": "Has Tenant Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1960, 200]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.tenantEmail}}",
+        "subject": "Maintenance request received – {{ $json.ticketId }}",
+        "emailType": "text",
+        "message": "={{$json.tenant_acknowledgement}}"
+      },
+      "id": "a1c4e7f2-0012",
+      "name": "Acknowledge Tenant",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [2180, 140],
+      "credentials": {
+        "smtp": { "id": "smtp-creds-01", "name": "SMTP Account" }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'received', ticket_id: $json.ticketId, urgency: $json.urgency, category: $json.category, assigned_to: $json.assigned_trade, message: $json.tenant_acknowledgement } }}"
+      },
+      "id": "a1c4e7f2-0013",
+      "name": "Return Confirmation",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2400, 200]
+    }
+  ],
+  "connections": {
+    "Webhook – Submit Request": {
+      "main": [[{ "node": "Validate & Enrich", "type": "main", "index": 0 }]]
+    },
+    "Validate & Enrich": {
+      "main": [[{ "node": "Valid?", "type": "main", "index": 0 }]]
+    },
+    "Valid?": {
+      "main": [
+        [{ "node": "Claude Triage Engine", "type": "main", "index": 0 }],
+        [{ "node": "Return Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Claude Triage Engine": {
+      "main": [[{ "node": "Merge Triage + Request", "type": "main", "index": 0 }]]
+    },
+    "Merge Triage + Request": {
+      "main": [[{ "node": "Save to Sheet", "type": "main", "index": 0 }]]
+    },
+    "Save to Sheet": {
+      "main": [[{ "node": "Emergency?", "type": "main", "index": 0 }]]
+    },
+    "Emergency?": {
+      "main": [
+        [{ "node": "Alert Manager – Emergency", "type": "main", "index": 0 }],
+        [{ "node": "Alert Manager – Standard", "type": "main", "index": 0 }]
+      ]
+    },
+    "Alert Manager – Emergency": {
+      "main": [[{ "node": "Has Tenant Email?", "type": "main", "index": 0 }]]
+    },
+    "Alert Manager – Standard": {
+      "main": [[{ "node": "Has Tenant Email?", "type": "main", "index": 0 }]]
+    },
+    "Has Tenant Email?": {
+      "main": [
+        [{ "node": "Acknowledge Tenant", "type": "main", "index": 0 }],
+        [{ "node": "Return Confirmation", "type": "main", "index": 0 }]
+      ]
+    },
+    "Acknowledge Tenant": {
+      "main": [[{ "node": "Return Confirmation", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": ["property", "maintenance", "tenants", "routing"],
+  "triggerCount": 0,
+  "updatedAt": "2025-04-30T09:00:00.000Z",
+  "versionId": "v1.0.0"
+}

@@ -1,0 +1,268 @@
+{
+  "name": "Podcast Guest Research Briefing Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "podcast-briefing",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "c7e2a4b9-0001",
+      "name": "Webhook – Request Briefing",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\n\nconst required = ['guest_name', 'episode_topic'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) {\n  return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\n}\n\nreturn [{\n  json: {\n    valid: true,\n    guestName: body.guest_name.trim(),\n    guestTitle: body.guest_title || '',\n    guestCompany: body.guest_company || '',\n    guestWebsite: body.guest_website || '',\n    episodeTopic: body.episode_topic.trim(),\n    podcastName: body.podcast_name || $env.PODCAST_NAME || 'the podcast',\n    podcastAudience: body.podcast_audience || $env.PODCAST_AUDIENCE || 'general audience',\n    interviewDate: body.interview_date || '',\n    hostName: body.host_name || $env.HOST_NAME || 'the host',\n    hostEmail: body.host_email || $env.HOST_EMAIL || null,\n    previousAppearances: body.previous_appearances || '',\n    specificFocusAreas: body.specific_focus_areas || '',\n    requestedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "c7e2a4b9-0002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 320]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-v",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "c7e2a4b9-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [640, 320]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "c7e2a4b9-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [860, 460]
+    },
+    {
+      "parameters": {
+        "query": "={{ $json.guestName }} {{ $json.guestCompany }} {{ $json.episodeTopic }}"
+      },
+      "id": "c7e2a4b9-0005",
+      "name": "Search Guest Background",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [860, 220],
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.tavily.com/search",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "api_key", "value": "={{$env.TAVILY_API_KEY}}" },
+            { "name": "query", "value": "={{ $('Validate Input').first().json.guestName }} {{ $('Validate Input').first().json.guestCompany }} {{ $('Validate Input').first().json.episodeTopic }} background career" },
+            { "name": "search_depth", "value": "advanced" },
+            { "name": "max_results", "value": 6 },
+            { "name": "include_answer", "value": true }
+          ]
+        },
+        "specifyBody": "json"
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.tavily.com/search",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "api_key", "value": "={{$env.TAVILY_API_KEY}}" },
+            { "name": "query", "value": "={{ $('Validate Input').first().json.guestName }} podcast interview {{ $('Validate Input').first().json.episodeTopic }} {{ new Date().getFullYear() }}" },
+            { "name": "search_depth", "value": "basic" },
+            { "name": "max_results", "value": 5 },
+            { "name": "include_answer", "value": false }
+          ]
+        },
+        "specifyBody": "json"
+      },
+      "id": "c7e2a4b9-0006",
+      "name": "Search Past Interviews",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [860, 380]
+    },
+    {
+      "parameters": {
+        "jsCode": "const guestSearch = $('Search Guest Background').first().json;\nconst interviewSearch = $('Search Past Interviews').first().json;\nconst input = $('Validate Input').first().json;\n\nconst guestResults = (guestSearch.results || []).map(r => ({\n  title: r.title,\n  url: r.url,\n  snippet: (r.content || r.snippet || '').slice(0, 400)\n}));\n\nconst interviewResults = (interviewSearch.results || []).map(r => ({\n  title: r.title,\n  url: r.url,\n  snippet: (r.content || r.snippet || '').slice(0, 300)\n}));\n\nconst autoAnswer = guestSearch.answer || '';\n\nreturn [{\n  json: {\n    input,\n    guestResults,\n    interviewResults,\n    autoAnswer,\n    searchedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "c7e2a4b9-0007",
+      "name": "Merge Search Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 300]
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-5",
+        "options": { "temperature": 0.5, "maxTokens": 2500 },
+        "messages": {
+          "values": [
+            {
+              "content": "You are a research assistant who prepares podcast host briefings before interviews. Your job is to synthesize everything you know and have found about a guest into a tight, useful document that helps the host walk in prepared.\n\nA good briefing:\n- Gives the host a clear sense of who this person actually is (not just their title)\n- Surfaces the most interesting or surprising things about their background\n- Identifies angles and questions the host could explore that other podcasts probably haven't\n- Flags things to avoid or handle carefully\n- Includes a set of questions at different depths — some easy openers, some substantive, some that could lead somewhere unexpected\n\nYou write clearly. No filler. The host will read this 30 minutes before the interview. Make every sentence count.\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Prepare a pre-interview briefing for the following guest.\n\nInterview details:\n- Guest: {{ $json.input.guestName }}{{ $json.input.guestTitle ? ', ' + $json.input.guestTitle : '' }}{{ $json.input.guestCompany ? ' at ' + $json.input.guestCompany : '' }}\n- Episode topic: {{ $json.input.episodeTopic }}\n- Podcast: {{ $json.input.podcastName }}\n- Audience: {{ $json.input.podcastAudience }}\n- Host: {{ $json.input.hostName }}\n- Interview date: {{ $json.input.interviewDate || 'not specified' }}\n- Specific areas to focus on: {{ $json.input.specificFocusAreas || 'none specified' }}\n- Known previous appearances: {{ $json.input.previousAppearances || 'none noted' }}\n\nWeb research on guest:\nAuto-summary: {{ $json.autoAnswer || 'not available' }}\n\nTop search results:\n{{ $json.guestResults.map((r, i) => `[${i+1}] ${r.title}\\n${r.snippet}\\nSource: ${r.url}`).join('\\n\\n') }}\n\nPast interview appearances found:\n{{ $json.interviewResults.map((r, i) => `[${i+1}] ${r.title}\\n${r.snippet}\\nSource: ${r.url}`).join('\\n\\n') || 'None found' }}\n\nGenerate the briefing as this JSON:\n{\n  \"guest_name\": \"{{ $json.input.guestName }}\",\n  \"episode_topic\": \"{{ $json.input.episodeTopic }}\",\n  \"tldr\": \"3-sentence summary of who this person is and why they're interesting for this episode. Written like you're texting a colleague.\",\n  \"background_snapshot\": \"A paragraph on their career arc — how they got to where they are, what makes their path interesting or unusual.\",\n  \"key_expertise\": [\"3-5 specific areas they can speak with genuine authority on\"],\n  \"notable_facts\": [\"3-5 interesting, specific, non-obvious things about this person that good research surfaced\"],\n  \"known_positions\": [\"3-4 things they're publicly on record believing or advocating — be specific, not generic\"],\n  \"unexplored_angles\": [\n    {\n      \"angle\": \"an angle other podcasts probably haven't covered\",\n      \"why_interesting\": \"why this could lead somewhere good\"\n    }\n  ],\n  \"handle_with_care\": [\"any sensitive topics, past controversies, or areas where the host should tread carefully — be honest\"],\n  \"questions\": {\n    \"openers\": [\"2-3 warm-up questions to get the guest comfortable\"],\n    \"substantive\": [\"4-5 meaty questions that get into the real content\"],\n    \"unexpected\": [\"2-3 questions they probably haven't been asked on other podcasts\"],\n    \"closing\": [\"1-2 good closing questions\"]\n  },\n  \"what_to_avoid\": \"topics or framings that would make this interview feel like every other one they've done\",\n  \"sources_consulted\": [\"list the URLs from search results that were most useful\"]\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "c7e2a4b9-0008",
+      "name": "Claude Briefing Writer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [1300, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet briefing;\ntry {\n  briefing = JSON.parse(raw.replace(/```json|```/g, '').trim());\n} catch(e) {\n  return [{ json: { error: 'Parse error', raw } }];\n}\nconst input = $('Validate Input').first().json;\nbriefing._hostEmail = input.hostEmail;\nbriefing._podcastName = input.podcastName;\nbriefing._interviewDate = input.interviewDate;\nreturn [{ json: briefing }];"
+      },
+      "id": "c7e2a4b9-0009",
+      "name": "Parse Briefing",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1520, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $input.first().json;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst qSection = (label, qs, color) =>\n  `<div style=\"margin-bottom:16px\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:${color};margin-bottom:8px\">${label}</div>\n    ${(qs||[]).map(q => `<div style=\"font-size:14px;padding:8px 12px;background:#fafaf8;border-left:3px solid ${color};margin-bottom:6px;line-height:1.5\">${esc(q)}</div>`).join('')}\n  </div>`;\n\nconst pillList = (items, color) =>\n  (items||[]).map(i => `<span style=\"display:inline-block;background:${color};font-size:12px;padding:3px 10px;border-radius:12px;margin:3px 4px 3px 0\">${esc(i)}</span>`).join('');\n\nconst unexploredAngles = (b.unexplored_angles||[]).map(a =>\n  `<div style=\"background:#f0f4ff;border-radius:6px;padding:12px 14px;margin-bottom:10px\">\n    <div style=\"font-size:14px;font-weight:600;color:#2563eb\">${esc(a.angle)}</div>\n    <div style=\"font-size:13px;color:#555;margin-top:4px\">${esc(a.why_interesting)}</div>\n  </div>`).join('');\n\nconst sources = (b.sources_consulted||[]).map(url =>\n  `<div style=\"font-size:12px;font-family:monospace\"><a href=\"${esc(url)}\" style=\"color:#2563eb\">${esc(url.slice(0,80))}${url.length>80?'...':''}</a></div>`).join('');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f5f5f3;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#1a1a1a\">\n<div style=\"max-width:680px;margin:0 auto\">\n  <div style=\"background:#0f172a;color:#fff;padding:22px 28px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;letter-spacing:1px;text-transform:uppercase;color:#64748b;margin-bottom:6px\">${esc(b._podcastName)} · Pre-Interview Briefing</div>\n    <div style=\"font-size:22px;font-weight:700\">${esc(b.guest_name)}</div>\n    <div style=\"font-size:14px;color:#94a3b8;margin-top:4px\">${esc(b.episode_topic)}${b._interviewDate ? ' · ' + b._interviewDate : ''}</div>\n  </div>\n\n  <div style=\"background:#fff;padding:20px 28px;border-left:1px solid #eee;border-right:1px solid #eee\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#888;letter-spacing:0.5px;margin-bottom:8px\">TL;DR</div>\n    <p style=\"font-size:15px;line-height:1.7;color:#333;margin:0;font-style:italic\">${esc(b.tldr)}</p>\n  </div>\n\n  <div style=\"background:#fff;padding:20px 28px;border:1px solid #eee;border-top:3px solid #f0f0f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#888;letter-spacing:0.5px;margin-bottom:8px\">Background</div>\n    <p style=\"font-size:14px;line-height:1.7;color:#333;margin:0\">${esc(b.background_snapshot)}</p>\n  </div>\n\n  <div style=\"background:#fff;padding:20px 28px;border:1px solid #eee;border-top:3px solid #f0f0f0\">\n    <div style=\"display:grid;grid-template-columns:1fr 1fr;gap:20px\">\n      <div>\n        <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#888;letter-spacing:0.5px;margin-bottom:8px\">Key expertise</div>\n        ${pillList(b.key_expertise, '#e0f2fe')}\n      </div>\n      <div>\n        <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#888;letter-spacing:0.5px;margin-bottom:8px\">Notable facts</div>\n        ${(b.notable_facts||[]).map(f => `<div style=\"font-size:13px;padding:5px 0;border-bottom:1px solid #f5f5f5;color:#333\">${esc(f)}</div>`).join('')}\n      </div>\n    </div>\n  </div>\n\n  <div style=\"background:#fff;padding:20px 28px;border:1px solid #eee;border-top:3px solid #f0f0f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#888;letter-spacing:0.5px;margin-bottom:8px\">Their known positions</div>\n    ${(b.known_positions||[]).map(p => `<div style=\"font-size:14px;padding:6px 0;border-bottom:1px solid #f5f5f5\">${esc(p)}</div>`).join('')}\n  </div>\n\n  <div style=\"background:#fff;padding:20px 28px;border:1px solid #eee;border-top:3px solid #f0f0f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#888;letter-spacing:0.5px;margin-bottom:10px\">Unexplored angles</div>\n    ${unexploredAngles}\n  </div>\n\n  <div style=\"background:#fff;padding:20px 28px;border:1px solid #eee;border-top:3px solid #f0f0f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#888;letter-spacing:0.5px;margin-bottom:10px\">Questions</div>\n    ${qSection('Openers', b.questions?.openers, '#6b7280')}\n    ${qSection('Substantive', b.questions?.substantive, '#2563eb')}\n    ${qSection('Unexpected', b.questions?.unexpected, '#7c3aed')}\n    ${qSection('Closing', b.questions?.closing, '#6b7280')}\n  </div>\n\n  ${(b.handle_with_care||[]).length ? `<div style=\"background:#fef3c7;padding:16px 28px;border:1px solid #fde68a\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#92400e;letter-spacing:0.5px;margin-bottom:8px\">⚠ Handle with care</div>\n    ${(b.handle_with_care||[]).map(h => `<div style=\"font-size:14px;color:#78350f;padding:4px 0\">${esc(h)}</div>`).join('')}\n  </div>` : ''}\n\n  <div style=\"background:#f8f8f8;padding:16px 28px;border:1px solid #eee\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#888;letter-spacing:0.5px;margin-bottom:6px\">What to avoid</div>\n    <div style=\"font-size:14px;color:#555;line-height:1.6\">${esc(b.what_to_avoid)}</div>\n  </div>\n\n  ${sources ? `<div style=\"background:#f8f8f8;padding:14px 28px;border:1px solid #eee;border-top:none\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#aaa;letter-spacing:0.5px;margin-bottom:6px\">Sources</div>${sources}\n  </div>` : ''}\n\n  <div style=\"background:#0f172a;color:#475569;font-size:11px;padding:12px 28px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Podcast Research Briefing · Generated ${new Date().toLocaleDateString()}\n  </div>\n</div>\n</body></html>`;\n\nreturn [{ json: { html, guestName: b.guest_name, hostEmail: b._hostEmail, briefing: b } }];"
+      },
+      "id": "c7e2a4b9-0010",
+      "name": "Build Briefing Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1740, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-email",
+              "leftValue": "={{ $json.hostEmail }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "c7e2a4b9-0011",
+      "name": "Send to Host?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1960, 300]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.hostEmail}}",
+        "subject": "Briefing: {{ $json.guestName }} – {{ $('Validate Input').first().json.episodeTopic }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "c7e2a4b9-0012",
+      "name": "Email Briefing to Host",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [2180, 220],
+      "credentials": {
+        "smtp": { "id": "smtp-creds-01", "name": "SMTP Account" }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'generated', guest: $json.guestName, emailed: $json.hostEmail ? true : false, briefing: $json.briefing } }}"
+      },
+      "id": "c7e2a4b9-0013",
+      "name": "Return Briefing",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2400, 300]
+    }
+  ],
+  "connections": {
+    "Webhook – Request Briefing": {
+      "main": [[{ "node": "Validate Input", "type": "main", "index": 0 }]]
+    },
+    "Validate Input": {
+      "main": [[{ "node": "Valid?", "type": "main", "index": 0 }]]
+    },
+    "Valid?": {
+      "main": [
+        [
+          { "node": "Search Guest Background", "type": "main", "index": 0 },
+          { "node": "Search Past Interviews", "type": "main", "index": 0 }
+        ],
+        [{ "node": "Return Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Search Guest Background": {
+      "main": [[{ "node": "Merge Search Results", "type": "main", "index": 0 }]]
+    },
+    "Search Past Interviews": {
+      "main": [[{ "node": "Merge Search Results", "type": "main", "index": 0 }]]
+    },
+    "Merge Search Results": {
+      "main": [[{ "node": "Claude Briefing Writer", "type": "main", "index": 0 }]]
+    },
+    "Claude Briefing Writer": {
+      "main": [[{ "node": "Parse Briefing", "type": "main", "index": 0 }]]
+    },
+    "Parse Briefing": {
+      "main": [[{ "node": "Build Briefing Email", "type": "main", "index": 0 }]]
+    },
+    "Build Briefing Email": {
+      "main": [[{ "node": "Send to Host?", "type": "main", "index": 0 }]]
+    },
+    "Send to Host?": {
+      "main": [
+        [{ "node": "Email Briefing to Host", "type": "main", "index": 0 }],
+        [{ "node": "Return Briefing", "type": "main", "index": 0 }]
+      ]
+    },
+    "Email Briefing to Host": {
+      "main": [[{ "node": "Return Briefing", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": ["podcast", "research", "media", "briefing"],
+  "triggerCount": 0,
+  "updatedAt": "2025-04-30T11:30:00.000Z",
+  "versionId": "v1.0.0"
+}

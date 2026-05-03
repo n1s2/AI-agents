@@ -1,0 +1,286 @@
+{
+  "name": "Gym Programming Coach Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "weeksInterval": 1,
+              "triggerAtDay": [0],
+              "triggerAtHour": 7,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "b3d6f1a8-0001",
+      "name": "Every Sunday 7am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [200, 260]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "log-workout",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "b3d6f1a8-0002",
+      "name": "Webhook – Log Workout",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 480]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.GYM_SHEET_ID}}",
+        "sheetName": "Profile",
+        "options": {}
+      },
+      "id": "b3d6f1a8-0003",
+      "name": "Load Athlete Profile",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [420, 180],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.GYM_SHEET_ID}}",
+        "sheetName": "Workouts",
+        "options": {}
+      },
+      "id": "b3d6f1a8-0004",
+      "name": "Load Workout History",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [420, 340],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const profileRows = $('Load Athlete Profile').all();\nconst workoutRows = $('Load Workout History').all();\n\nconst profile = {};\nfor (const r of profileRows) {\n  const k = (r.json.setting || '').toLowerCase().replace(/\\s+/g, '_');\n  if (k) profile[k] = r.json.value;\n}\n\nconst goal = profile.primary_goal || 'general fitness';\nconst trainingAge = profile.training_age || '1-2 years';\nconst daysPerWeek = parseInt(profile.days_per_week) || 4;\nconst sessionLength = parseInt(profile.session_length_minutes) || 60;\nconst equipment = profile.equipment || 'full gym';\nconst limitations = profile.injuries_limitations || 'none';\nconst preferredStyle = profile.preferred_style || 'mixed';\nconst currentLifts = profile.current_lifts || '';\n\n// Last 4 weeks of workouts\nconst cutoff = new Date();\ncutoff.setDate(cutoff.getDate() - 28);\nconst recentWorkouts = workoutRows\n  .map(r => r.json)\n  .filter(w => w.date && new Date(w.date) >= cutoff)\n  .sort((a, b) => new Date(b.date) - new Date(a.date));\n\n// Extract PRs and volume trends\nconst exerciseMap = {};\nfor (const w of recentWorkouts) {\n  const ex = w.exercise;\n  const load = parseFloat(w.weight_kg || w.weight_lbs || 0);\n  const reps = parseInt(w.reps) || 0;\n  if (!ex) continue;\n  if (!exerciseMap[ex] || load > exerciseMap[ex].maxLoad) {\n    exerciseMap[ex] = { maxLoad: load, reps, date: w.date };\n  }\n}\n\nconst recentPRs = Object.entries(exerciseMap)\n  .map(([exercise, data]) => ({ exercise, ...data }))\n  .slice(0, 8);\n\n// Sessions per week trend\nconst weeksBack = [0, 1, 2, 3].map(w => {\n  const start = new Date();\n  start.setDate(start.getDate() - (w + 1) * 7);\n  const end = new Date();\n  end.setDate(end.getDate() - w * 7);\n  const count = recentWorkouts.filter(wo => {\n    const d = new Date(wo.date);\n    return d >= start && d < end;\n  }).length;\n  return count;\n});\n\nconst avgSessionsLast4Weeks = (weeksBack.reduce((a, b) => a + b, 0) / 4).toFixed(1);\n\n// Notes from last week\nconst lastWeekNotes = recentWorkouts\n  .filter(w => {\n    const d = new Date(w.date);\n    const cutoffDate = new Date();\n    cutoffDate.setDate(cutoffDate.getDate() - 7);\n    return d >= cutoffDate;\n  })\n  .map(w => w.notes)\n  .filter(Boolean)\n  .join(' | ');\n\nreturn [{\n  json: {\n    goal, trainingAge, daysPerWeek, sessionLength,\n    equipment, limitations, preferredStyle, currentLifts,\n    recentPRs, avgSessionsLast4Weeks,\n    weeksBack,\n    lastWeekNotes,\n    totalRecentWorkouts: recentWorkouts.length,\n    weekOf: new Date().toISOString().split('T')[0]\n  }\n}];"
+      },
+      "id": "b3d6f1a8-0005",
+      "name": "Build Athlete Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 260]
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-5",
+        "options": { "temperature": 0.65, "maxTokens": 2800 },
+        "messages": {
+          "values": [
+            {
+              "content": "You are an experienced strength and conditioning coach. You write weekly training programs that are progressive, specific to the athlete's goal and history, and realistic given their equipment and time constraints.\n\nYou don't pad programs with unnecessary volume. You think about recovery, balance between pushing and pulling, and you adapt when the athlete has been inconsistent or has noted fatigue or soreness. You're direct about what to prioritize this week and why.\n\nAlways respond with valid JSON only. No markdown, no preamble.",
+              "role": "system"
+            },
+            {
+              "content": "Design this week's training program.\n\nAthlete profile:\n- Primary goal: {{ $json.goal }}\n- Training age: {{ $json.trainingAge }}\n- Days available: {{ $json.daysPerWeek }} per week\n- Session length: {{ $json.sessionLength }} minutes\n- Equipment: {{ $json.equipment }}\n- Injuries/limitations: {{ $json.limitations }}\n- Preferred style: {{ $json.preferredStyle }}\n- Current lifts/benchmarks: {{ $json.currentLifts || 'not provided' }}\n\nRecent training data (last 4 weeks):\n- Average sessions/week: {{ $json.avgSessionsLast4Weeks }}\n- Session counts by week (most recent first): {{ $json.weeksBack.join(', ') }}\n- Total logged workouts: {{ $json.totalRecentWorkouts }}\n- Recent top loads by exercise: {{ $json.recentPRs.map(p => p.exercise + ': ' + p.maxLoad + ' x' + p.reps).join(', ') || 'no data yet' }}\n- Notes from last week: {{ $json.lastWeekNotes || 'none' }}\n\nRespond with this JSON structure:\n{\n  \"week_of\": \"{{ $json.weekOf }}\",\n  \"program_focus\": \"one sentence on what this week emphasizes and why, based on their history\",\n  \"coach_note\": \"2-3 sentences — direct and honest assessment of last week and what to focus on this week. Reference their actual data.\",\n  \"sessions\": [\n    {\n      \"day\": \"Monday\",\n      \"session_type\": \"e.g. Lower Body Strength\",\n      \"estimated_duration_minutes\": 55,\n      \"warm_up\": \"brief warm-up description, 2-3 movements\",\n      \"exercises\": [\n        {\n          \"name\": \"Back Squat\",\n          \"sets\": 4,\n          \"reps\": \"5\",\n          \"load_guidance\": \"e.g. 75-80% 1RM or RPE 7-8\",\n          \"rest_seconds\": 180,\n          \"coaching_cue\": \"one specific technical cue for this athlete\",\n          \"notes\": \"e.g. drop 5% from last week if knees felt off\"\n        }\n      ],\n      \"cool_down\": \"brief cool-down or mobility work\",\n      \"session_notes\": \"anything specific about pacing, focus, or how to gauge intensity today\"\n    }\n  ],\n  \"weekly_targets\": {\n    \"total_sets\": \"approximate total working sets this week\",\n    \"focus_muscles\": [\"primary muscle groups trained this week\"],\n    \"deload\": false\n  },\n  \"nutrition_reminder\": \"one practical nutrition note relevant to their goal this week — specific, not generic\",\n  \"next_week_preview\": \"one sentence on what progression to expect next week if this week goes well\"\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "b3d6f1a8-0006",
+      "name": "Claude Program Writer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [860, 260]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet program;\ntry {\n  program = JSON.parse(raw.replace(/```json|```/g, '').trim());\n} catch(e) {\n  return [{ json: { error: 'Parse error', raw } }];\n}\nprogram._athleteContext = $('Build Athlete Context').first().json;\nreturn [{ json: program }];"
+      },
+      "id": "b3d6f1a8-0007",
+      "name": "Parse Program",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 260]
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $input.first().json;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst sessionCards = (p.sessions || []).map((s, i) => {\n  const exerciseRows = (s.exercises || []).map(ex => `\n    <div style=\"padding:10px 0;border-bottom:1px solid #f0ede8\">\n      <div style=\"display:flex;justify-content:space-between;align-items:baseline\">\n        <strong style=\"font-size:14px\">${esc(ex.name)}</strong>\n        <span style=\"font-family:monospace;font-size:13px;color:#555\">${ex.sets}×${esc(ex.reps)} · ${esc(ex.load_guidance)}</span>\n      </div>\n      <div style=\"font-size:12px;color:#888;margin-top:3px\">Rest: ${ex.rest_seconds}s &nbsp;|&nbsp; ${esc(ex.coaching_cue)}</div>\n      ${ex.notes ? `<div style=\"font-size:12px;color:#b45309;margin-top:2px\">↳ ${esc(ex.notes)}</div>` : ''}\n    </div>`).join('');\n\n  return `<div style=\"background:#fff;border:1px solid #e8e4df;border-radius:8px;margin-bottom:14px;overflow:hidden\">\n    <div style=\"background:#2d3748;color:#fff;padding:10px 16px;display:flex;justify-content:space-between;align-items:center\">\n      <strong style=\"font-size:14px\">${esc(s.day)} — ${esc(s.session_type)}</strong>\n      <span style=\"font-size:12px;color:#a0aec0\">~${s.estimated_duration_minutes} min</span>\n    </div>\n    <div style=\"padding:14px 16px\">\n      ${s.warm_up ? `<div style=\"font-size:12px;color:#888;margin-bottom:10px\">🔥 Warm-up: ${esc(s.warm_up)}</div>` : ''}\n      ${exerciseRows}\n      ${s.cool_down ? `<div style=\"font-size:12px;color:#888;margin-top:10px\">🧊 Cool-down: ${esc(s.cool_down)}</div>` : ''}\n      ${s.session_notes ? `<div style=\"background:#f7f5f0;border-radius:4px;padding:8px 12px;margin-top:10px;font-size:13px;color:#555\">${esc(s.session_notes)}</div>` : ''}\n    </div>\n  </div>`;\n}).join('');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f5f0eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#1a1a1a\">\n<div style=\"max-width:620px;margin:0 auto\">\n  <div style=\"background:#1a202c;color:#fff;padding:20px 24px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;letter-spacing:1px;text-transform:uppercase;color:#718096;margin-bottom:4px\">Weekly Training Program</div>\n    <div style=\"font-size:19px;font-weight:700\">${esc(p.program_focus)}</div>\n    <div style=\"font-size:13px;color:#a0aec0;margin-top:4px\">Week of ${esc(p.week_of)} · ${(p.sessions||[]).length} sessions</div>\n  </div>\n\n  <div style=\"background:#fff;padding:18px 24px;border-left:1px solid #eee;border-right:1px solid #eee\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#888;margin-bottom:6px\">Coach's Note</div>\n    <p style=\"font-size:15px;line-height:1.7;color:#333;margin:0\">${esc(p.coach_note)}</p>\n  </div>\n\n  <div style=\"background:#fff;padding:18px 24px;border:1px solid #eee;border-top:3px solid #f0ede8\">\n    ${sessionCards}\n  </div>\n\n  <div style=\"background:#fff;padding:16px 24px;border:1px solid #eee;border-top:3px solid #f0ede8\">\n    <div style=\"display:grid;grid-template-columns:1fr 1fr;gap:16px;font-size:13px\">\n      <div><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#888;margin-bottom:4px\">Weekly targets</div>\n        <div>~${esc(p.weekly_targets?.total_sets)} working sets</div>\n        <div style=\"color:#555\">${(p.weekly_targets?.focus_muscles||[]).join(', ')}</div>\n        ${p.weekly_targets?.deload ? '<div style=\"color:#d97706;font-weight:600\">⚡ Deload week</div>' : ''}\n      </div>\n      <div><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#888;margin-bottom:4px\">Nutrition note</div>\n        <div style=\"color:#555;line-height:1.5\">${esc(p.nutrition_reminder)}</div>\n      </div>\n    </div>\n  </div>\n\n  ${p.next_week_preview ? `<div style=\"background:#edf2ff;padding:12px 24px;border:1px solid #c5d4f8;font-size:13px;color:#3c4fa0\">\n    <strong>Next week:</strong> ${esc(p.next_week_preview)}\n  </div>` : ''}\n\n  <div style=\"background:#1a202c;color:#555;font-size:11px;padding:12px 24px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Gym Programming Coach · ${esc(p.week_of)}\n  </div>\n</div>\n</body></html>`;\n\nreturn [{ json: { html, weekOf: p.week_of, sessionCount: (p.sessions||[]).length } }];"
+      },
+      "id": "b3d6f1a8-0008",
+      "name": "Build Program Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 260]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$env.ATHLETE_EMAIL}}",
+        "subject": "Your training program – week of {{ $json.weekOf }} ({{ $json.sessionCount }} sessions)",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "b3d6f1a8-0009",
+      "name": "Send Program",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1520, 260],
+      "credentials": {
+        "smtp": { "id": "smtp-creds-01", "name": "SMTP Account" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['exercise', 'sets', 'reps'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) {\n  return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\n}\nreturn [{\n  json: {\n    valid: true,\n    date: body.date || new Date().toISOString().split('T')[0],\n    exercise: body.exercise.trim(),\n    sets: parseInt(body.sets) || 1,\n    reps: parseInt(body.reps) || 0,\n    weight_kg: parseFloat(body.weight_kg) || null,\n    weight_lbs: parseFloat(body.weight_lbs) || null,\n    rpe: parseFloat(body.rpe) || null,\n    notes: (body.notes || '').slice(0, 300),\n    sessionType: body.session_type || '',\n    loggedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "b3d6f1a8-0010",
+      "name": "Validate Workout Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 480]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-wv",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "b3d6f1a8-0011",
+      "name": "Workout Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [640, 480]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.GYM_SHEET_ID}}",
+        "sheetName": "Workouts",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "date": "={{ $json.date }}",
+            "exercise": "={{ $json.exercise }}",
+            "sets": "={{ $json.sets }}",
+            "reps": "={{ $json.reps }}",
+            "weight_kg": "={{ $json.weight_kg }}",
+            "weight_lbs": "={{ $json.weight_lbs }}",
+            "rpe": "={{ $json.rpe }}",
+            "session_type": "={{ $json.sessionType }}",
+            "notes": "={{ $json.notes }}",
+            "logged_at": "={{ $json.loggedAt }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "b3d6f1a8-0012",
+      "name": "Save Workout Set",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [860, 480],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'logged', exercise: $json.exercise, sets: $json.sets, reps: $json.reps, weight_kg: $json.weight_kg } }}"
+      },
+      "id": "b3d6f1a8-0013",
+      "name": "Return Log Confirmation",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1080, 480]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "b3d6f1a8-0014",
+      "name": "Return Workout Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [860, 600]
+    }
+  ],
+  "connections": {
+    "Every Sunday 7am": {
+      "main": [
+        [
+          { "node": "Load Athlete Profile", "type": "main", "index": 0 },
+          { "node": "Load Workout History", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Load Athlete Profile": {
+      "main": [[{ "node": "Build Athlete Context", "type": "main", "index": 0 }]]
+    },
+    "Load Workout History": {
+      "main": [[{ "node": "Build Athlete Context", "type": "main", "index": 0 }]]
+    },
+    "Build Athlete Context": {
+      "main": [[{ "node": "Claude Program Writer", "type": "main", "index": 0 }]]
+    },
+    "Claude Program Writer": {
+      "main": [[{ "node": "Parse Program", "type": "main", "index": 0 }]]
+    },
+    "Parse Program": {
+      "main": [[{ "node": "Build Program Email", "type": "main", "index": 0 }]]
+    },
+    "Build Program Email": {
+      "main": [[{ "node": "Send Program", "type": "main", "index": 0 }]]
+    },
+    "Webhook – Log Workout": {
+      "main": [[{ "node": "Validate Workout Log", "type": "main", "index": 0 }]]
+    },
+    "Validate Workout Log": {
+      "main": [[{ "node": "Workout Valid?", "type": "main", "index": 0 }]]
+    },
+    "Workout Valid?": {
+      "main": [
+        [{ "node": "Save Workout Set", "type": "main", "index": 0 }],
+        [{ "node": "Return Workout Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Save Workout Set": {
+      "main": [[{ "node": "Return Log Confirmation", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": ["fitness", "training", "personal", "weekly"],
+  "triggerCount": 1,
+  "updatedAt": "2025-04-30T10:00:00.000Z",
+  "versionId": "v1.0.1"
+}
