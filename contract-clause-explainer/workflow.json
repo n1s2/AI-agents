@@ -1,0 +1,193 @@
+{
+  "name": "Contract Clause Explainer Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "explain-contract",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "k4n7q1r3-0001",
+      "name": "Webhook – Submit Contract",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\n\nconst required = ['contract_text'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) {\n  return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\n}\n\nif (body.contract_text.trim().length < 100) {\n  return [{ json: { valid: false, error: 'Contract text too short. Paste at least one full clause.' } }];\n}\n\nconst contractTypes = ['employment', 'freelance', 'saas', 'nda', 'lease', 'partnership', 'service', 'vendor', 'consulting', 'other'];\nconst contractType = contractTypes.includes(body.contract_type) ? body.contract_type : 'other';\n\nreturn [{\n  json: {\n    valid: true,\n    contractText: body.contract_text.trim().slice(0, 12000),\n    contractType,\n    partyRole: body.party_role || 'not specified',\n    specificClauses: (body.specific_clauses || '').slice(0, 500),\n    jurisdiction: body.jurisdiction || '',\n    replyEmail: body.reply_email || null,\n    requestedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "k4n7q1r3-0002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 320]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-v",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "k4n7q1r3-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [640, 320]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "k4n7q1r3-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [860, 460]
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-5",
+        "options": { "temperature": 0.3, "maxTokens": 3500 },
+        "messages": {
+          "values": [
+            {
+              "content": "You explain contracts to non-lawyers in plain language. You are not giving legal advice and you say so clearly once at the start. After that disclaimer, you get genuinely useful — you explain what clauses actually mean in practice, flag provisions that are unusual or one-sided, identify what the person should negotiate or push back on, and highlight anything that could cause real problems.\n\nYou write clearly. No legalese. You explain the real-world implication of each clause, not just what it says. If something is standard and fine, say so. If something is aggressive or unusual, say that too.\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Explain this contract to me.\n\nContract type: {{ $json.contractType }}\nMy role in this contract: {{ $json.partyRole }}\nJurisdiction: {{ $json.jurisdiction || 'not specified' }}\nSpecific clauses I want focused on: {{ $json.specificClauses || 'none specified — review the full contract' }}\n\nContract text:\n{{ $json.contractText }}\n\nReturn this JSON:\n{\n  \"disclaimer\": \"one sentence only — that this is plain-language explanation, not legal advice, and they should consult a lawyer for important decisions\",\n  \"contract_summary\": \"3-4 sentence plain-English summary of what this contract is and what it does overall\",\n  \"my_key_obligations\": [\"list of the main things the person reading this is required to do under this contract — plain language, be specific\"],\n  \"other_party_obligations\": [\"what the other party is required to do\"],\n  \"clause_explanations\": [\n    {\n      \"clause_name\": \"name or identifier of the clause\",\n      \"what_it_says\": \"plain language explanation of what this clause actually means — one paragraph max\",\n      \"real_world_implication\": \"what this means in practice for the person — what could actually happen because of this clause\",\n      \"risk_level\": \"one of: standard | watch | negotiate | red_flag\",\n      \"risk_note\": \"if risk_level is not standard: why it's worth attention and what to do about it\"\n    }\n  ],\n  \"red_flags\": [\"any clauses that are genuinely unusual, one-sided, or potentially harmful — be specific about which clause and why\"],\n  \"negotiate_these\": [\n    {\n      \"clause\": \"which clause\",\n      \"why\": \"why it's worth pushing back on\",\n      \"suggested_ask\": \"what to ask for instead or in addition\"\n    }\n  ],\n  \"missing_protections\": [\"things that would normally be in a contract like this that are absent here — could be an oversight or intentional\"],\n  \"questions_to_ask\": [\"2-3 questions to ask the other party or your lawyer before signing\"]\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "k4n7q1r3-0005",
+      "name": "Claude Contract Explainer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [860, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet analysis;\ntry {\n  analysis = JSON.parse(raw.replace(/```json|```/g, '').trim());\n} catch(e) {\n  return [{ json: { error: 'Parse error', raw } }];\n}\nconst input = $('Validate Input').first().json;\nanalysis._replyEmail = input.replyEmail;\nanalysis._contractType = input.contractType;\nanalysis._partyRole = input.partyRole;\nreturn [{ json: analysis }];"
+      },
+      "id": "k4n7q1r3-0006",
+      "name": "Parse Analysis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const a = $input.first().json;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst riskConfig = {\n  standard:  { color: '#16a34a', bg: '#f0fdf4', label: 'Standard' },\n  watch:     { color: '#d97706', bg: '#fffbeb', label: 'Watch' },\n  negotiate: { color: '#2563eb', bg: '#eff6ff', label: 'Negotiate' },\n  red_flag:  { color: '#dc2626', bg: '#fef2f2', label: 'Red Flag ⚠️' }\n};\n\nconst clauseCards = (a.clause_explanations || []).map(cl => {\n  const rc = riskConfig[cl.risk_level] || riskConfig.standard;\n  return `\n  <div style=\"border:1px solid ${rc.color}33;border-radius:8px;margin-bottom:12px;overflow:hidden\">\n    <div style=\"background:${rc.bg};padding:8px 16px;display:flex;justify-content:space-between;align-items:center\">\n      <strong style=\"font-size:14px;color:#1a1a1a\">${esc(cl.clause_name)}</strong>\n      <span style=\"font-size:11px;font-weight:700;color:${rc.color};text-transform:uppercase;letter-spacing:0.4px\">${esc(rc.label)}</span>\n    </div>\n    <div style=\"padding:12px 16px\">\n      <div style=\"font-size:14px;color:#333;line-height:1.65;margin-bottom:8px\">${esc(cl.what_it_says)}</div>\n      <div style=\"font-size:13px;color:#555;background:#fafafa;padding:8px 12px;border-radius:4px;line-height:1.5\">\n        <strong>In practice:</strong> ${esc(cl.real_world_implication)}\n      </div>\n      ${cl.risk_note ? `<div style=\"font-size:13px;color:${rc.color};margin-top:8px\">↳ ${esc(cl.risk_note)}</div>` : ''}\n    </div>\n  </div>`;\n}).join('');\n\nconst obligationList = (items, color) =>\n  (items||[]).map(i => `<li style=\"font-size:14px;margin-bottom:6px;line-height:1.5;color:${color}\">${esc(i)}</li>`).join('');\n\nconst negotiateCards = (a.negotiate_these || []).map(n =>\n  `<div style=\"border-left:3px solid #2563eb;padding:10px 14px;background:#eff6ff;border-radius:0 6px 6px 0;margin-bottom:10px\">\n    <div style=\"font-size:13px;font-weight:700;color:#1d4ed8\">${esc(n.clause)}</div>\n    <div style=\"font-size:13px;color:#333;margin:4px 0\">${esc(n.why)}</div>\n    <div style=\"font-size:13px;color:#2563eb\"><strong>Ask for:</strong> ${esc(n.suggested_ask)}</div>\n  </div>`).join('');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f4f4f2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#1a1a1a\">\n<div style=\"max-width:680px;margin:0 auto\">\n\n  <div style=\"background:#1e293b;color:#fff;padding:20px 28px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#64748b;margin-bottom:6px\">Contract Explainer · ${esc(a._contractType)}</div>\n    <div style=\"font-size:19px;font-weight:700\">Your contract, in plain English</div>\n    <div style=\"font-size:12px;color:#94a3b8;margin-top:4px\">Role: ${esc(a._partyRole)}</div>\n  </div>\n\n  <div style=\"background:#fef3c7;padding:12px 28px;border:1px solid #fde68a;font-size:13px;color:#92400e\">\n    ${esc(a.disclaimer)}\n  </div>\n\n  <div style=\"background:#fff;padding:20px 28px;border:1px solid #eee;border-top:none\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#888;margin-bottom:8px\">What this contract does</div>\n    <p style=\"font-size:15px;line-height:1.7;color:#333;margin:0\">${esc(a.contract_summary)}</p>\n  </div>\n\n  <div style=\"background:#fff;padding:20px 28px;border:1px solid #eee;border-top:3px solid #f0f0f0\">\n    <div style=\"display:grid;grid-template-columns:1fr 1fr;gap:20px\">\n      <div>\n        <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#dc2626;margin-bottom:8px\">Your obligations</div>\n        <ul style=\"list-style:disc;padding-left:16px;margin:0\">${obligationList(a.my_key_obligations, '#333')}</ul>\n      </div>\n      <div>\n        <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#16a34a;margin-bottom:8px\">Their obligations</div>\n        <ul style=\"list-style:disc;padding-left:16px;margin:0\">${obligationList(a.other_party_obligations, '#555')}</ul>\n      </div>\n    </div>\n  </div>\n\n  <div style=\"background:#fff;padding:20px 28px;border:1px solid #eee;border-top:3px solid #f0f0f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#888;margin-bottom:14px\">Clause by clause</div>\n    ${clauseCards}\n  </div>\n\n  ${(a.red_flags||[]).length ? `<div style=\"background:#fef2f2;padding:16px 28px;border:1px solid #fecaca\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#dc2626;margin-bottom:10px\">⚠ Red flags</div>\n    ${(a.red_flags||[]).map(rf => `<div style=\"font-size:14px;color:#7f1d1d;padding:5px 0;border-bottom:1px solid #fee2e2\">${esc(rf)}</div>`).join('')}\n  </div>` : ''}\n\n  ${negotiateCards ? `<div style=\"background:#fff;padding:20px 28px;border:1px solid #eee;border-top:3px solid #f0f0f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#2563eb;margin-bottom:12px\">Push back on these</div>\n    ${negotiateCards}\n  </div>` : ''}\n\n  ${(a.missing_protections||[]).length ? `<div style=\"background:#fff;padding:16px 28px;border:1px solid #eee;border-top:3px solid #f0f0f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9333ea;margin-bottom:8px\">Missing protections</div>\n    ${(a.missing_protections||[]).map(m => `<div style=\"font-size:14px;color:#555;padding:5px 0;border-bottom:1px solid #f5f0ff\">${esc(m)}</div>`).join('')}\n  </div>` : ''}\n\n  ${(a.questions_to_ask||[]).length ? `<div style=\"background:#f8faff;padding:16px 28px;border:1px solid #dbe4ff\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#4f46e5;margin-bottom:10px\">Ask these before signing</div>\n    ${(a.questions_to_ask||[]).map(q => `<div style=\"font-size:14px;color:#312e81;padding:6px 0;border-bottom:1px solid #e0e7ff\">${esc(q)}</div>`).join('')}\n  </div>` : ''}\n\n  <div style=\"background:#1e293b;color:#475569;font-size:11px;padding:12px 28px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Contract Clause Explainer · Not legal advice · ${new Date().toLocaleDateString()}\n  </div>\n</div>\n</body></html>`;\n\nconst redFlagCount = (a.red_flags||[]).length;\nreturn [{ json: { html, replyEmail: a._replyEmail, contractType: a._contractType, redFlagCount, analysis: a } }];"
+      },
+      "id": "k4n7q1r3-0007",
+      "name": "Build Explanation Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 240]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-email",
+              "leftValue": "={{ $json.replyEmail }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "k4n7q1r3-0008",
+      "name": "Has Reply Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1520, 240]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.replyEmail}}",
+        "subject": "Your {{ $json.contractType }} contract explained{{ $json.redFlagCount > 0 ? ' — ' + $json.redFlagCount + ' red flag' + ($json.redFlagCount > 1 ? 's' : '') + ' found' : '' }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "k4n7q1r3-0009",
+      "name": "Email Explanation",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1740, 180],
+      "credentials": {
+        "smtp": { "id": "smtp-creds-01", "name": "SMTP Account" }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'explained', contract_type: $json.contractType, red_flags: $json.redFlagCount, emailed: $json.replyEmail ? true : false, analysis: $json.analysis } }}"
+      },
+      "id": "k4n7q1r3-0010",
+      "name": "Return Explanation",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1960, 240]
+    }
+  ],
+  "connections": {
+    "Webhook – Submit Contract": {
+      "main": [[{ "node": "Validate Input", "type": "main", "index": 0 }]]
+    },
+    "Validate Input": {
+      "main": [[{ "node": "Valid?", "type": "main", "index": 0 }]]
+    },
+    "Valid?": {
+      "main": [
+        [{ "node": "Claude Contract Explainer", "type": "main", "index": 0 }],
+        [{ "node": "Return Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Claude Contract Explainer": {
+      "main": [[{ "node": "Parse Analysis", "type": "main", "index": 0 }]]
+    },
+    "Parse Analysis": {
+      "main": [[{ "node": "Build Explanation Report", "type": "main", "index": 0 }]]
+    },
+    "Build Explanation Report": {
+      "main": [[{ "node": "Has Reply Email?", "type": "main", "index": 0 }]]
+    },
+    "Has Reply Email?": {
+      "main": [
+        [{ "node": "Email Explanation", "type": "main", "index": 0 }],
+        [{ "node": "Return Explanation", "type": "main", "index": 0 }]
+      ]
+    },
+    "Email Explanation": {
+      "main": [[{ "node": "Return Explanation", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": ["contracts", "legal", "tools", "explainer"],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-01T11:00:00.000Z",
+  "versionId": "v1.0.0"
+}

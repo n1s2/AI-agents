@@ -1,0 +1,232 @@
+{
+  "name": "Conference Talk Submission Coach",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "cfp-coach",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "h1k4m7n2-0001",
+      "name": "Webhook – Submit CFP Draft",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\n\nconst required = ['talk_title', 'abstract', 'conference_name'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) {\n  return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\n}\n\nif (body.abstract.trim().length < 80) {\n  return [{ json: { valid: false, error: 'Abstract too short — minimum 80 characters' } }];\n}\n\nconst formats = ['keynote', 'full_talk', 'lightning_talk', 'workshop', 'panel', 'tutorial'];\nconst format = formats.includes(body.format) ? body.format : 'full_talk';\n\nreturn [{\n  json: {\n    valid: true,\n    talkTitle: body.talk_title.trim(),\n    abstract: body.abstract.trim().slice(0, 3000),\n    outlineOrNotes: (body.outline_or_notes || '').trim().slice(0, 2000),\n    conferenceName: body.conference_name.trim(),\n    conferenceUrl: body.conference_url || '',\n    audienceLevel: body.audience_level || 'intermediate',\n    format,\n    speakerBio: (body.speaker_bio || '').slice(0, 800),\n    speakerEmail: body.speaker_email || null,\n    submissionDeadline: body.submission_deadline || '',\n    previousTalks: body.previous_talks || '',\n    specificConcerns: (body.specific_concerns || '').slice(0, 500),\n    requestedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "h1k4m7n2-0002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 320]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-v",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "h1k4m7n2-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [640, 320]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "h1k4m7n2-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [860, 460]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.tavily.com/search",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "api_key", "value": "={{$env.TAVILY_API_KEY}}" },
+            { "name": "query", "value": "={{ $json.conferenceName }} conference talks topics audience {{ new Date().getFullYear() }}" },
+            { "name": "search_depth", "value": "basic" },
+            { "name": "max_results", "value": 4 }
+          ]
+        },
+        "specifyBody": "json"
+      },
+      "id": "h1k4m7n2-0005",
+      "name": "Research Conference",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [860, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const confSearch = $('Research Conference').first().json;\nconst input = $('Validate Input').first().json;\n\nconst confContext = (confSearch.results || [])\n  .map(r => `${r.title}: ${(r.content || r.snippet || '').slice(0, 300)}`)\n  .join('\\n\\n');\n\nreturn [{ json: { input, confContext: confContext || 'No conference context found' } }];"
+      },
+      "id": "h1k4m7n2-0006",
+      "name": "Merge Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1060, 300]
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-5",
+        "options": { "temperature": 0.6, "maxTokens": 3000 },
+        "messages": {
+          "values": [
+            {
+              "content": "You are a seasoned conference speaker and CFP reviewer who has submitted dozens of talks and reviewed hundreds of proposals. You know what makes a proposal get selected and what gets it binned in the first 30 seconds.\n\nYou're honest — if an abstract is vague, you say so. If the title won't stand out in a list of 200 proposals, you say that too. You give specific, actionable feedback and rewrite examples, not generic advice.\n\nYou understand that a CFP abstract is a sales document — it has to convince the committee that (a) this topic is worth 30-45 minutes of their attendees' time, and (b) this speaker can deliver it.\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Review this conference talk submission and provide coaching.\n\nSubmission details:\n- Title: {{ $json.input.talkTitle }}\n- Conference: {{ $json.input.conferenceName }}\n- Format: {{ $json.input.format }}\n- Audience level: {{ $json.input.audienceLevel }}\n- Deadline: {{ $json.input.submissionDeadline || 'not specified' }}\n- Specific concerns from speaker: {{ $json.input.specificConcerns || 'none' }}\n\nAbstract:\n{{ $json.input.abstract }}\n\nOutline/notes (if provided):\n{{ $json.input.outlineOrNotes || 'Not provided' }}\n\nSpeaker bio (if provided):\n{{ $json.input.speakerBio || 'Not provided' }}\n\nPrevious talks:\n{{ $json.input.previousTalks || 'Not provided' }}\n\nConference context from web research:\n{{ $json.confContext }}\n\nProvide your coaching as this JSON:\n{\n  \"overall_score\": 7,\n  \"verdict\": \"one of: strong_submit | submit_with_tweaks | significant_revision_needed | rethink_angle\",\n  \"one_line_summary\": \"your honest one-sentence read on where this submission stands right now\",\n  \"strengths\": [\"2-4 genuine strengths — be specific, not generic\"],\n  \"critical_issues\": [\n    {\n      \"issue\": \"what the problem is\",\n      \"why_it_matters\": \"how it hurts the submission\",\n      \"fix\": \"exactly what to do\"\n    }\n  ],\n  \"title_feedback\": {\n    \"assessment\": \"honest assessment of the current title\",\n    \"alternative_titles\": [\"3 alternative title options — ranging from safe to bold\"]\n  },\n  \"abstract_rewrite\": \"a full rewritten version of the abstract incorporating your feedback — keep it roughly the same length as the original but make it sharper. This should be copy-paste ready.\",\n  \"structure_suggestions\": [\n    \"if an outline was provided or can be inferred: 3-5 structural suggestions to make the talk flow better or land harder\"\n  ],\n  \"bio_feedback\": \"feedback on the speaker bio if provided, or what to include if not. One short paragraph.\",\n  \"differentiation\": \"what would make this talk stand out from other submissions on similar topics — be specific about what angle or hook is most distinctive\",\n  \"committee_perspective\": \"2-3 sentences written as if you're a committee member reading this — what would you be thinking, what questions would you have, what would make you vote yes or hesitate\"\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "h1k4m7n2-0007",
+      "name": "Claude CFP Coach",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [1280, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet feedback;\ntry {\n  feedback = JSON.parse(raw.replace(/```json|```/g, '').trim());\n} catch(e) {\n  return [{ json: { error: 'Parse error', raw } }];\n}\nconst input = $('Validate Input').first().json;\nfeedback._speakerEmail = input.speakerEmail;\nfeedback._conferenceName = input.conferenceName;\nfeedback._talkTitle = input.talkTitle;\nfeedback._deadline = input.submissionDeadline;\nreturn [{ json: feedback }];"
+      },
+      "id": "h1k4m7n2-0008",
+      "name": "Parse Feedback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1500, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const f = $input.first().json;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst verdictConfig = {\n  strong_submit:              { label: 'Strong — Submit Now',         color: '#16a34a', bg: '#f0fdf4' },\n  submit_with_tweaks:         { label: 'Good — Submit with Tweaks',   color: '#ca8a04', bg: '#fefce8' },\n  significant_revision_needed:{ label: 'Needs Significant Revision',  color: '#dc2626', bg: '#fef2f2' },\n  rethink_angle:              { label: 'Rethink the Angle',           color: '#7c3aed', bg: '#f5f3ff' }\n};\nconst v = verdictConfig[f.verdict] || { label: f.verdict, color: '#6b7280', bg: '#f9fafb' };\n\nconst scoreBar = Array.from({length: 10}, (_, i) =>\n  `<span style=\"display:inline-block;width:20px;height:10px;border-radius:2px;background:${i < f.overall_score ? '#2563eb' : '#e5e7eb'};margin-right:2px\"></span>`\n).join('');\n\nconst issueCards = (f.critical_issues || []).map(ci => `\n  <div style=\"border-left:3px solid #dc2626;padding:12px 16px;background:#fef9f9;border-radius:0 6px 6px 0;margin-bottom:10px\">\n    <div style=\"font-size:13px;font-weight:700;color:#dc2626;margin-bottom:4px\">${esc(ci.issue)}</div>\n    <div style=\"font-size:13px;color:#555;margin-bottom:6px\">${esc(ci.why_it_matters)}</div>\n    <div style=\"font-size:13px;color:#16a34a\"><strong>Fix:</strong> ${esc(ci.fix)}</div>\n  </div>`).join('');\n\nconst altTitles = (f.title_feedback?.alternative_titles || []).map((t, i) =>\n  `<div style=\"font-size:14px;padding:8px 12px;background:#f8f8ff;border-radius:4px;margin-bottom:6px;font-style:italic\">${esc(t)}</div>`\n).join('');\n\nconst structureSuggestions = (f.structure_suggestions || []).filter(Boolean).map(s =>\n  `<li style=\"font-size:14px;margin-bottom:8px;line-height:1.5\">${esc(s)}</li>`\n).join('');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f5f5f3;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#1a1a1a\">\n<div style=\"max-width:680px;margin:0 auto\">\n\n  <div style=\"background:#18181b;color:#fff;padding:22px 28px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;letter-spacing:1px;text-transform:uppercase;color:#71717a;margin-bottom:6px\">CFP Review · ${esc(f._conferenceName)}</div>\n    <div style=\"font-size:19px;font-weight:700\">${esc(f._talkTitle)}</div>\n    ${f._deadline ? `<div style=\"font-size:12px;color:#a1a1aa;margin-top:4px\">Deadline: ${esc(f._deadline)}</div>` : ''}\n  </div>\n\n  <div style=\"background:${v.bg};border:1px solid ${v.color}33;padding:16px 28px;display:flex;align-items:center;gap:16px\">\n    <span style=\"background:${v.color};color:#fff;font-size:12px;font-weight:700;padding:4px 12px;border-radius:20px;white-space:nowrap\">${esc(v.label)}</span>\n    <div>\n      <div style=\"margin-bottom:4px\">${scoreBar}</div>\n      <div style=\"font-size:13px;color:#555\">${esc(f.one_line_summary)}</div>\n    </div>\n  </div>\n\n  <div style=\"background:#fff;padding:20px 28px;border:1px solid #eee;border-top:none\">\n    <div style=\"display:grid;grid-template-columns:1fr 1fr;gap:20px\">\n      <div>\n        <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#16a34a;letter-spacing:0.5px;margin-bottom:8px\">Strengths</div>\n        ${(f.strengths||[]).map(s => `<div style=\"font-size:14px;padding:5px 0;border-bottom:1px solid #f0f0f0;line-height:1.5\">${esc(s)}</div>`).join('')}\n      </div>\n      <div>\n        <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#dc2626;letter-spacing:0.5px;margin-bottom:8px\">Critical issues</div>\n        ${issueCards || '<div style=\"font-size:14px;color:#888\">None identified</div>'}\n      </div>\n    </div>\n  </div>\n\n  <div style=\"background:#fff;padding:20px 28px;border:1px solid #eee;border-top:3px solid #f0f0f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#888;letter-spacing:0.5px;margin-bottom:8px\">Title feedback</div>\n    <p style=\"font-size:14px;color:#333;margin:0 0 12px;line-height:1.6\">${esc(f.title_feedback?.assessment)}</p>\n    <div style=\"font-size:12px;font-weight:700;text-transform:uppercase;color:#aaa;letter-spacing:0.4px;margin-bottom:8px\">Alternative titles</div>\n    ${altTitles}\n  </div>\n\n  <div style=\"background:#f8faff;padding:20px 28px;border:1px solid #dbe4ff\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#2563eb;letter-spacing:0.5px;margin-bottom:10px\">Rewritten abstract — copy-paste ready</div>\n    <div style=\"font-size:14px;line-height:1.75;white-space:pre-wrap;color:#1a1a1a\">${esc(f.abstract_rewrite)}</div>\n  </div>\n\n  ${structureSuggestions ? `<div style=\"background:#fff;padding:20px 28px;border:1px solid #eee;border-top:3px solid #f0f0f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#888;letter-spacing:0.5px;margin-bottom:10px\">Structure suggestions</div>\n    <ul style=\"padding-left:18px;margin:0\">${structureSuggestions}</ul>\n  </div>` : ''}\n\n  <div style=\"background:#fff;padding:20px 28px;border:1px solid #eee;border-top:3px solid #f0f0f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#888;letter-spacing:0.5px;margin-bottom:8px\">What would make this stand out</div>\n    <p style=\"font-size:14px;line-height:1.65;color:#333;margin:0\">${esc(f.differentiation)}</p>\n  </div>\n\n  <div style=\"background:#fffbeb;padding:16px 28px;border:1px solid #fde68a\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#92400e;letter-spacing:0.5px;margin-bottom:8px\">As the committee sees it</div>\n    <p style=\"font-size:14px;line-height:1.65;color:#78350f;margin:0;font-style:italic\">${esc(f.committee_perspective)}</p>\n  </div>\n\n  <div style=\"background:#fff;padding:16px 28px;border:1px solid #eee;border-top:none\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#888;letter-spacing:0.5px;margin-bottom:8px\">Speaker bio notes</div>\n    <p style=\"font-size:14px;line-height:1.65;color:#333;margin:0\">${esc(f.bio_feedback)}</p>\n  </div>\n\n  <div style=\"background:#18181b;color:#555;font-size:11px;padding:12px 28px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    CFP Coach · ${new Date().toLocaleDateString()}\n  </div>\n</div>\n</body></html>`;\n\nreturn [{ json: { html, talkTitle: f._talkTitle, speakerEmail: f._speakerEmail, verdict: f.verdict, score: f.overall_score, feedback: f } }];"
+      },
+      "id": "h1k4m7n2-0009",
+      "name": "Build Feedback Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1720, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-email",
+              "leftValue": "={{ $json.speakerEmail }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "h1k4m7n2-0010",
+      "name": "Has Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1940, 300]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.speakerEmail}}",
+        "subject": "CFP Review: \"{{ $json.talkTitle }}\" — {{ $json.verdict.replace(/_/g, ' ') }} ({{ $json.score }}/10)",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "h1k4m7n2-0011",
+      "name": "Email Feedback",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [2160, 220],
+      "credentials": {
+        "smtp": { "id": "smtp-creds-01", "name": "SMTP Account" }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'reviewed', talk_title: $json.talkTitle, score: $json.score, verdict: $json.verdict, emailed: $json.speakerEmail ? true : false, feedback: $json.feedback } }}"
+      },
+      "id": "h1k4m7n2-0012",
+      "name": "Return Review",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2380, 300]
+    }
+  ],
+  "connections": {
+    "Webhook – Submit CFP Draft": {
+      "main": [[{ "node": "Validate Input", "type": "main", "index": 0 }]]
+    },
+    "Validate Input": {
+      "main": [[{ "node": "Valid?", "type": "main", "index": 0 }]]
+    },
+    "Valid?": {
+      "main": [
+        [
+          { "node": "Research Conference", "type": "main", "index": 0 }
+        ],
+        [{ "node": "Return Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Research Conference": {
+      "main": [[{ "node": "Merge Context", "type": "main", "index": 0 }]]
+    },
+    "Merge Context": {
+      "main": [[{ "node": "Claude CFP Coach", "type": "main", "index": 0 }]]
+    },
+    "Claude CFP Coach": {
+      "main": [[{ "node": "Parse Feedback", "type": "main", "index": 0 }]]
+    },
+    "Parse Feedback": {
+      "main": [[{ "node": "Build Feedback Email", "type": "main", "index": 0 }]]
+    },
+    "Build Feedback Email": {
+      "main": [[{ "node": "Has Email?", "type": "main", "index": 0 }]]
+    },
+    "Has Email?": {
+      "main": [
+        [{ "node": "Email Feedback", "type": "main", "index": 0 }],
+        [{ "node": "Return Review", "type": "main", "index": 0 }]
+      ]
+    },
+    "Email Feedback": {
+      "main": [[{ "node": "Return Review", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": ["speaking", "conferences", "cfp", "writing"],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-01T09:00:00.000Z",
+  "versionId": "v1.0.0"
+}
