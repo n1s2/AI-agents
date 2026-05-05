@@ -1,0 +1,231 @@
+{
+  "name": "Visa & Immigration Document Checklist Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "visa-checklist",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "p3s6u9w2-0001",
+      "name": "Webhook – Request Checklist",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\n\nconst required = ['nationality', 'destination_country', 'visa_type'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) {\n  return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\n}\n\nconst validVisaTypes = [\n  'tourist', 'business', 'student', 'work', 'digital_nomad',\n  'family_reunion', 'transit', 'medical', 'retirement', 'investor'\n];\nconst visaType = validVisaTypes.includes(body.visa_type) ? body.visa_type : 'tourist';\n\nreturn [{\n  json: {\n    valid: true,\n    nationality: body.nationality.trim(),\n    destinationCountry: body.destination_country.trim(),\n    visaType,\n    purposeDetails: (body.purpose_details || '').slice(0, 600),\n    intendedStayDays: parseInt(body.intended_stay_days) || null,\n    departureDate: body.departure_date || '',\n    currentResidence: body.current_residence || '',\n    employmentStatus: body.employment_status || '',\n    hasChildren: body.has_children === true || body.has_children === 'true',\n    previousVisaRefusals: body.previous_visa_refusals === true || body.previous_visa_refusals === 'true',\n    replyEmail: body.reply_email || null,\n    requestedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "p3s6u9w2-0002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 320]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-v",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "p3s6u9w2-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [640, 320]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "p3s6u9w2-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [860, 480]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.tavily.com/search",
+        "sendBody": true,
+        "specifyBody": "json",
+        "bodyParameters": {
+          "parameters": [
+            { "name": "api_key", "value": "={{$env.TAVILY_API_KEY}}" },
+            { "name": "query", "value": "={{ $json.nationality }} passport {{ $json.visaType }} visa {{ $json.destinationCountry }} requirements documents {{ new Date().getFullYear() }}" },
+            { "name": "search_depth", "value": "advanced" },
+            { "name": "max_results", "value": 5 },
+            { "name": "include_answer", "value": true }
+          ]
+        }
+      },
+      "id": "p3s6u9w2-0005",
+      "name": "Search Visa Requirements",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [860, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const searchResult = $('Search Visa Requirements').first().json;\nconst input = $('Validate Input').first().json;\n\nconst autoAnswer = searchResult.answer || '';\nconst snippets = (searchResult.results || [])\n  .map(r => `SOURCE: ${r.url}\\n${r.title}\\n${(r.content || r.snippet || '').slice(0, 500)}`)\n  .join('\\n\\n');\n\nreturn [{\n  json: {\n    input,\n    researchContext: autoAnswer\n      ? `Summary: ${autoAnswer}\\n\\nDetailed sources:\\n${snippets}`\n      : snippets || 'No web results found — using general knowledge only.',\n    sourceUrls: (searchResult.results || []).map(r => r.url).filter(Boolean)\n  }\n}];"
+      },
+      "id": "p3s6u9w2-0006",
+      "name": "Merge Research",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1060, 320]
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-5",
+        "options": { "temperature": 0.25, "maxTokens": 3000 },
+        "messages": {
+          "values": [
+            {
+              "content": "You generate detailed, accurate visa and immigration document checklists. You combine real research with your general knowledge to produce a practical, well-organized checklist that covers both mandatory documents and commonly requested supporting evidence.\n\nYou are not a lawyer or immigration consultant. You say this clearly once, then get genuinely useful. You flag when something is particularly complex or uncertain and suggest official sources.\n\nYou are specific and practical. You know that 'bank statements' means the last 3-6 months with a minimum balance threshold that varies by country. You know the difference between a notarized translation and a certified translation. You distinguish between what is always required vs what is typically requested vs what is sometimes asked for.\n\nAlways respond with valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Generate a visa document checklist for this applicant.\n\nApplicant details:\n- Nationality: {{ $json.input.nationality }}\n- Destination: {{ $json.input.destinationCountry }}\n- Visa type: {{ $json.input.visaType }}\n- Purpose / additional context: {{ $json.input.purposeDetails || 'none provided' }}\n- Intended stay: {{ $json.input.intendedStayDays ? $json.input.intendedStayDays + ' days' : 'not specified' }}\n- Departure date: {{ $json.input.departureDate || 'not specified' }}\n- Current residence: {{ $json.input.currentResidence || 'not specified' }}\n- Employment status: {{ $json.input.employmentStatus || 'not specified' }}\n- Travelling with children: {{ $json.input.hasChildren }}\n- Previous visa refusals: {{ $json.input.previousVisaRefusals }}\n\nCurrent web research on requirements:\n{{ $json.researchContext }}\n\nGenerate the checklist as this JSON:\n{\n  \"disclaimer\": \"one sentence only — that this is informational and they should verify with the official embassy or consulate\",\n  \"summary\": \"2-3 sentences: what type of visa this is, approximate processing time if known, and where to apply (embassy, consulate, e-visa portal, visa on arrival, etc.)\",\n  \"visa_free_or_on_arrival\": true or false,\n  \"visa_free_note\": \"if visa_free_or_on_arrival is true: explain what that means exactly (e.g. 30 days visa on arrival, extend once, etc.). null otherwise.\",\n  \"checklist\": [\n    {\n      \"category\": \"category name e.g. Identity Documents | Financial Evidence | Travel Documents | Accommodation Proof | Employment/Study Documents | Additional for Your Situation\",\n      \"items\": [\n        {\n          \"document\": \"document name\",\n          \"required\": \"always | usually | sometimes\",\n          \"details\": \"specific practical details — how many copies, validity period, format, translation needed, what it must show, minimum balance if financial, etc.\",\n          \"watch_out\": \"common mistake or thing people get wrong with this document — null if nothing notable\"\n        }\n      ]\n    }\n  ],\n  \"timeline_advice\": \"practical advice on when to start gathering documents and submit — specific to this visa type and destination\",\n  \"previous_refusal_note\": {{ $json.input.previousVisaRefusals }} ? \"specific advice for handling a previous refusal in this application\" : null,\n  \"children_note\": {{ $json.input.hasChildren }} ? \"additional documents typically needed when travelling with or applying for children\" : null,\n  \"official_sources\": [\n    {\n      \"name\": \"name of the official resource\",\n      \"url\": \"official URL — embassy website, government portal, etc.\"\n    }\n  ],\n  \"top_tips\": [\"3-4 practical tips specific to this visa type and nationality combination that often make the difference\"]\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "p3s6u9w2-0007",
+      "name": "Claude Checklist Generator",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [1280, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet checklist;\ntry {\n  checklist = JSON.parse(raw.replace(/```json|```/g, '').trim());\n} catch(e) {\n  return [{ json: { error: 'Parse error', raw } }];\n}\n\nconst input = $('Validate Input').first().json;\nchecklist._replyEmail = input.replyEmail;\nchecklist._nationality = input.nationality;\nchecklist._destination = input.destinationCountry;\nchecklist._visaType = input.visaType;\nchecklist._sourceUrls = $('Merge Research').first().json.sourceUrls || [];\n\nreturn [{ json: checklist }];"
+      },
+      "id": "p3s6u9w2-0008",
+      "name": "Parse Checklist",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1500, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const c = $input.first().json;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst requiredColor = {\n  always:    { bg: '#fef2f2', color: '#b91c1c', label: 'Always required' },\n  usually:   { bg: '#fffbeb', color: '#b45309', label: 'Usually required' },\n  sometimes: { bg: '#f0f9ff', color: '#0369a1', label: 'Sometimes requested' }\n};\n\nconst categoryBlocks = (c.checklist || []).map(cat => {\n  const itemRows = (cat.items || []).map(item => {\n    const rc = requiredColor[item.required] || requiredColor.sometimes;\n    return `\n    <div style=\"border:1px solid #e8e4df;border-radius:6px;margin-bottom:10px;overflow:hidden\">\n      <div style=\"background:#f8f7f5;padding:8px 14px;display:flex;justify-content:space-between;align-items:center\">\n        <strong style=\"font-size:14px;color:#1a1a1a\">${esc(item.document)}</strong>\n        <span style=\"background:${rc.bg};color:${rc.color};font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;white-space:nowrap\">${esc(rc.label)}</span>\n      </div>\n      <div style=\"padding:10px 14px\">\n        <div style=\"font-size:13px;color:#444;line-height:1.6\">${esc(item.details)}</div>\n        ${item.watch_out ? `<div style=\"margin-top:8px;font-size:12px;color:#d97706;background:#fffbeb;padding:6px 10px;border-radius:4px\">⚠ ${esc(item.watch_out)}</div>` : ''}\n      </div>\n    </div>`;\n  }).join('');\n\n  return `\n  <div style=\"margin-bottom:22px\">\n    <div style=\"font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#888;margin-bottom:10px;padding-bottom:6px;border-bottom:2px solid #f0ece6\">${esc(cat.category)}</div>\n    ${itemRows}\n  </div>`;\n}).join('');\n\nconst officialLinks = (c.official_sources || []).map(s =>\n  `<div style=\"font-size:13px;padding:5px 0\"><a href=\"${esc(s.url)}\" style=\"color:#1d4ed8\">${esc(s.name)}</a></div>`\n).join('');\n\nconst tipList = (c.top_tips || []).map((t, i) =>\n  `<div style=\"font-size:14px;padding:8px 0;border-bottom:1px solid #e8f0fe;line-height:1.6\"><span style=\"color:#1d4ed8;font-weight:700;margin-right:8px\">${i+1}.</span>${esc(t)}</div>`\n).join('');\n\nconst alwaysCount = (c.checklist || []).reduce((s, cat) => s + (cat.items||[]).filter(i => i.required === 'always').length, 0);\nconst totalCount = (c.checklist || []).reduce((s, cat) => s + (cat.items||[]).length, 0);\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f5f3f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#1a1a1a\">\n<div style=\"max-width:680px;margin:0 auto\">\n\n  <div style=\"background:#1e3a5f;color:#fff;padding:22px 28px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#93b4d4;margin-bottom:6px\">${esc(c._visaType.replace(/_/g,' '))} Visa Checklist</div>\n    <div style=\"font-size:20px;font-weight:700\">${esc(c._nationality)} → ${esc(c._destination)}</div>\n    <div style=\"margin-top:6px;font-size:13px;color:#93b4d4\">${alwaysCount} required documents · ${totalCount} total items</div>\n  </div>\n\n  <div style=\"background:#fef3c7;padding:12px 28px;border:1px solid #fde68a;font-size:13px;color:#92400e\">\n    ${esc(c.disclaimer)}\n  </div>\n\n  ${c.visa_free_or_on_arrival ? `<div style=\"background:#f0fdf4;padding:14px 28px;border:1px solid #bbf7d0\">\n    <div style=\"font-size:12px;font-weight:700;text-transform:uppercase;color:#15803d;letter-spacing:0.4px;margin-bottom:6px\">✅ Visa-free / On arrival</div>\n    <div style=\"font-size:14px;color:#166534;line-height:1.6\">${esc(c.visa_free_note)}</div>\n  </div>` : ''}\n\n  <div style=\"background:#fff;padding:18px 28px;border:1px solid #eee;border-top:none\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#888;margin-bottom:8px\">Overview</div>\n    <p style=\"font-size:14px;line-height:1.7;color:#333;margin:0\">${esc(c.summary)}</p>\n  </div>\n\n  <div style=\"background:#fff;padding:20px 28px;border:1px solid #eee;border-top:3px solid #eee\">\n    ${categoryBlocks}\n  </div>\n\n  <div style=\"background:#eff6ff;padding:16px 28px;border:1px solid #bfdbfe\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#1d4ed8;margin-bottom:10px\">Top tips</div>\n    ${tipList}\n  </div>\n\n  <div style=\"background:#fff;padding:16px 28px;border:1px solid #eee;border-top:3px solid #eee\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#888;margin-bottom:8px\">Timeline</div>\n    <p style=\"font-size:14px;line-height:1.65;color:#555;margin:0\">${esc(c.timeline_advice)}</p>\n  </div>\n\n  ${c.previous_refusal_note ? `<div style=\"background:#fef2f2;padding:14px 28px;border:1px solid #fecaca\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#b91c1c;margin-bottom:8px\">Previous refusal — what to do</div>\n    <p style=\"font-size:14px;line-height:1.65;color:#7f1d1d;margin:0\">${esc(c.previous_refusal_note)}</p>\n  </div>` : ''}\n\n  ${c.children_note ? `<div style=\"background:#f5f3ff;padding:14px 28px;border:1px solid #ddd6fe\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#7c3aed;margin-bottom:8px\">Travelling with children</div>\n    <p style=\"font-size:14px;line-height:1.65;color:#4c1d95;margin:0\">${esc(c.children_note)}</p>\n  </div>` : ''}\n\n  ${officialLinks ? `<div style=\"background:#fff;padding:14px 28px;border:1px solid #eee;border-top:3px solid #eee\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#888;margin-bottom:8px\">Official sources</div>\n    ${officialLinks}\n  </div>` : ''}\n\n  <div style=\"background:#1e3a5f;color:#4a7fa5;font-size:11px;padding:12px 28px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Visa Checklist Agent · Not official immigration advice · ${new Date().toLocaleDateString()}\n  </div>\n</div>\n</body></html>`;\n\nreturn [{ json: { html, replyEmail: c._replyEmail, nationality: c._nationality, destination: c._destination, visaType: c._visaType, checklist: c } }];"
+      },
+      "id": "p3s6u9w2-0009",
+      "name": "Build Checklist Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1720, 320]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-email",
+              "leftValue": "={{ $json.replyEmail }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "p3s6u9w2-0010",
+      "name": "Has Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1940, 320]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.replyEmail}}",
+        "subject": "Visa checklist: {{ $json.nationality }} → {{ $json.destination }} ({{ $json.visaType.replace(/_/g, ' ') }})",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "p3s6u9w2-0011",
+      "name": "Email Checklist",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [2160, 240],
+      "credentials": {
+        "smtp": { "id": "smtp-creds-01", "name": "SMTP Account" }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'generated', nationality: $json.nationality, destination: $json.destination, visa_type: $json.visaType, emailed: $json.replyEmail ? true : false, checklist: $json.checklist } }}"
+      },
+      "id": "p3s6u9w2-0012",
+      "name": "Return Checklist",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2380, 320]
+    }
+  ],
+  "connections": {
+    "Webhook – Request Checklist": {
+      "main": [[{ "node": "Validate Input", "type": "main", "index": 0 }]]
+    },
+    "Validate Input": {
+      "main": [[{ "node": "Valid?", "type": "main", "index": 0 }]]
+    },
+    "Valid?": {
+      "main": [
+        [{ "node": "Search Visa Requirements", "type": "main", "index": 0 }],
+        [{ "node": "Return Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Search Visa Requirements": {
+      "main": [[{ "node": "Merge Research", "type": "main", "index": 0 }]]
+    },
+    "Merge Research": {
+      "main": [[{ "node": "Claude Checklist Generator", "type": "main", "index": 0 }]]
+    },
+    "Claude Checklist Generator": {
+      "main": [[{ "node": "Parse Checklist", "type": "main", "index": 0 }]]
+    },
+    "Parse Checklist": {
+      "main": [[{ "node": "Build Checklist Email", "type": "main", "index": 0 }]]
+    },
+    "Build Checklist Email": {
+      "main": [[{ "node": "Has Email?", "type": "main", "index": 0 }]]
+    },
+    "Has Email?": {
+      "main": [
+        [{ "node": "Email Checklist", "type": "main", "index": 0 }],
+        [{ "node": "Return Checklist", "type": "main", "index": 0 }]
+      ]
+    },
+    "Email Checklist": {
+      "main": [[{ "node": "Return Checklist", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": ["travel", "visa", "immigration", "documents"],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-02T11:00:00.000Z",
+  "versionId": "v1.0.0"
+}

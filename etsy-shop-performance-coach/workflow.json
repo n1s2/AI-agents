@@ -1,0 +1,233 @@
+{
+  "name": "Etsy Shop Performance Coach",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "weeksInterval": 1,
+              "triggerAtDay": [1],
+              "triggerAtHour": 7,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "n2q5s8v1-0001",
+      "name": "Every Monday 7am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [200, 260]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "etsy-stats",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "n2q5s8v1-0002",
+      "name": "Webhook – Manual Stats Upload",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 480]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.ETSY_SHEET_ID}}",
+        "sheetName": "Weekly Stats",
+        "options": {}
+      },
+      "id": "n2q5s8v1-0003",
+      "name": "Load Stats History",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [420, 260],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.ETSY_SHEET_ID}}",
+        "sheetName": "Listings",
+        "options": {}
+      },
+      "id": "n2q5s8v1-0004",
+      "name": "Load Listing Data",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [420, 420],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const statsRows = $('Load Stats History').all().map(r => r.json);\nconst listingRows = $('Load Listing Data').all().map(r => r.json);\n\n// Sort stats by week descending\nstatsRows.sort((a, b) => new Date(b.week_ending) - new Date(a.week_ending));\n\nconst thisWeek = statsRows[0] || {};\nconst lastWeek = statsRows[1] || {};\nconst fourWeeksAgo = statsRows[3] || {};\n\nfunction pct(a, b) {\n  if (!b || b === 0) return null;\n  return parseFloat(((a - b) / b * 100).toFixed(1));\n}\n\nconst revenue = parseFloat(thisWeek.revenue) || 0;\nconst orders = parseInt(thisWeek.orders) || 0;\nconst views = parseInt(thisWeek.views) || 0;\nconst visits = parseInt(thisWeek.visits) || 0;\nconst favorites = parseInt(thisWeek.favorites) || 0;\nconst conversionRate = visits > 0 ? parseFloat((orders / visits * 100).toFixed(2)) : 0;\nconst avgOrderValue = orders > 0 ? parseFloat((revenue / orders).toFixed(2)) : 0;\n\nconst lastRevenue = parseFloat(lastWeek.revenue) || 0;\nconst lastOrders = parseInt(lastWeek.orders) || 0;\nconst lastViews = parseInt(lastWeek.views) || 0;\nconst lastVisits = parseInt(lastWeek.visits) || 0;\nconst lastConversion = lastVisits > 0 ? parseFloat((lastOrders / lastVisits * 100).toFixed(2)) : 0;\n\n// 4-week averages\nconst recent4 = statsRows.slice(0, 4);\nconst avg4Revenue = recent4.reduce((s, r) => s + (parseFloat(r.revenue) || 0), 0) / Math.max(recent4.length, 1);\nconst avg4Orders = recent4.reduce((s, r) => s + (parseInt(r.orders) || 0), 0) / Math.max(recent4.length, 1);\n\n// Top listings by views this week\nconst topListings = listingRows\n  .filter(l => l.listing_title)\n  .sort((a, b) => (parseInt(b.views_this_week) || 0) - (parseInt(a.views_this_week) || 0))\n  .slice(0, 5)\n  .map(l => ({\n    title: l.listing_title,\n    views: parseInt(l.views_this_week) || 0,\n    orders: parseInt(l.orders_this_week) || 0,\n    price: parseFloat(l.price) || 0,\n    conversion: (parseInt(l.views_this_week) || 0) > 0\n      ? parseFloat(((parseInt(l.orders_this_week)||0) / (parseInt(l.views_this_week)||0) * 100).toFixed(1))\n      : 0,\n    daysListed: parseInt(l.days_listed) || 0\n  }));\n\n// Listings with high views but zero orders (conversion problem)\nconst coldListings = listingRows\n  .filter(l => l.listing_title && (parseInt(l.views_this_week) || 0) > 20 && (parseInt(l.orders_this_week) || 0) === 0)\n  .map(l => ({ title: l.listing_title, views: parseInt(l.views_this_week) || 0, price: parseFloat(l.price) || 0 }));\n\nconst weekOf = thisWeek.week_ending || new Date().toISOString().split('T')[0];\n\nreturn [{\n  json: {\n    weekOf,\n    current: { revenue, orders, views, visits, favorites, conversionRate, avgOrderValue },\n    vsLastWeek: {\n      revenue: pct(revenue, lastRevenue),\n      orders: pct(orders, lastOrders),\n      views: pct(views, lastViews),\n      visits: pct(visits, lastVisits),\n      conversion: pct(conversionRate, lastConversion)\n    },\n    avg4: { revenue: parseFloat(avg4Revenue.toFixed(2)), orders: parseFloat(avg4Orders.toFixed(1)) },\n    topListings,\n    coldListings,\n    totalListings: listingRows.filter(l => l.listing_title).length,\n    shopName: $env.SHOP_NAME || 'Your Etsy Shop'\n  }\n}];"
+      },
+      "id": "n2q5s8v1-0005",
+      "name": "Compute Shop Metrics",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 340]
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-5",
+        "options": { "temperature": 0.65, "maxTokens": 1000 },
+        "messages": {
+          "values": [
+            {
+              "content": "You are a practical Etsy shop coach who understands both the creative and commercial sides of running a handmade or digital goods shop. You analyze real weekly data and give specific, actionable advice — not generic tips like 'add more photos' or 'use better keywords'.\n\nYou look at the actual numbers: conversion rate, which listings are getting clicks but not selling, revenue trends. You give a frank read of what the data shows and one or two specific things to do this week. Keep the whole note under 250 words. Write like a knowledgeable friend, not a marketing consultant.",
+              "role": "system"
+            },
+            {
+              "content": "Write this week's Etsy shop coaching note.\n\nShop: {{ $json.shopName }}\nWeek ending: {{ $json.weekOf }}\nTotal active listings: {{ $json.totalListings }}\n\nThis week:\n- Revenue: ${{ $json.current.revenue }}{{ $json.vsLastWeek.revenue !== null ? ' (' + ($json.vsLastWeek.revenue > 0 ? '+' : '') + $json.vsLastWeek.revenue + '% vs last week)' : '' }}\n- Orders: {{ $json.current.orders }}{{ $json.vsLastWeek.orders !== null ? ' (' + ($json.vsLastWeek.orders > 0 ? '+' : '') + $json.vsLastWeek.orders + '% vs last week)' : '' }}\n- Visits: {{ $json.current.visits }}{{ $json.vsLastWeek.visits !== null ? ' (' + ($json.vsLastWeek.visits > 0 ? '+' : '') + $json.vsLastWeek.visits + '% vs last week)' : '' }}\n- Conversion rate: {{ $json.current.conversionRate }}%{{ $json.vsLastWeek.conversion !== null ? ' (was ' + ($json.current.conversionRate - ($json.vsLastWeek.conversion/100 * $json.current.conversionRate)).toFixed(2) + '% last week)' : '' }}\n- Avg order value: ${{ $json.current.avgOrderValue }}\n- Favorites added: {{ $json.current.favorites }}\n\n4-week averages: ${{ $json.avg4.revenue }}/week revenue, {{ $json.avg4.orders }} orders/week\n\nTop listings by views:\n{{ $json.topListings.map(l => `- ${l.title}: ${l.views} views, ${l.orders} orders, ${l.conversion}% conversion, $${l.price}`).join('\\n') }}\n\nHigh views, zero orders this week ({{ $json.coldListings.length }}):\n{{ $json.coldListings.map(l => `- ${l.title}: ${l.views} views, $${l.price}`).join('\\n') || 'none' }}\n\nWrite the coaching note. Be specific about the actual numbers. Call out what's working and what isn't.",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "n2q5s8v1-0006",
+      "name": "Claude Shop Coach",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [860, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "const coachNote = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nconst d = $('Compute Shop Metrics').first().json;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst trendArrow = (pct) => {\n  if (pct === null || pct === undefined) return '';\n  return pct > 0\n    ? `<span style=\"color:#16a34a;font-size:12px\"> ↑${pct}%</span>`\n    : pct < 0\n    ? `<span style=\"color:#dc2626;font-size:12px\"> ↓${Math.abs(pct)}%</span>`\n    : `<span style=\"color:#888;font-size:12px\"> →</span>`;\n};\n\nconst statCards = [\n  { label: 'Revenue', value: `$${d.current.revenue}`, trend: d.vsLastWeek.revenue },\n  { label: 'Orders', value: d.current.orders, trend: d.vsLastWeek.orders },\n  { label: 'Visits', value: d.current.visits, trend: d.vsLastWeek.visits },\n  { label: 'Conversion', value: `${d.current.conversionRate}%`, trend: d.vsLastWeek.conversion },\n  { label: 'Avg Order', value: `$${d.current.avgOrderValue}`, trend: null },\n  { label: 'Favorites', value: d.current.favorites, trend: null }\n].map(s => `\n  <div style=\"background:#fff;border:1px solid #e8e4df;border-radius:8px;padding:14px 16px;text-align:center\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:#999;margin-bottom:4px\">${esc(s.label)}</div>\n    <div style=\"font-size:22px;font-weight:700;color:#1a1a1a\">${esc(String(s.value))}</div>\n    <div style=\"font-size:12px;min-height:16px\">${trendArrow(s.trend)}</div>\n  </div>`).join('');\n\nconst topListingRows = d.topListings.map(l => `\n  <tr style=\"border-bottom:1px solid #f5f5f5\">\n    <td style=\"padding:9px 12px;font-size:13px;color:#333\">${esc(l.title)}</td>\n    <td style=\"padding:9px 12px;font-size:13px;text-align:right\">${l.views}</td>\n    <td style=\"padding:9px 12px;font-size:13px;text-align:right\">${l.orders}</td>\n    <td style=\"padding:9px 12px;font-size:13px;text-align:right;color:${l.conversion > 3 ? '#16a34a' : l.conversion > 1 ? '#d97706' : '#dc2626'}\">${l.conversion}%</td>\n    <td style=\"padding:9px 12px;font-size:13px;text-align:right\">$${l.price}</td>\n  </tr>`).join('');\n\nconst coldListingRows = d.coldListings.map(l => `\n  <div style=\"display:flex;justify-content:space-between;font-size:13px;padding:7px 0;border-bottom:1px solid #fef2f2\">\n    <span style=\"color:#555\">${esc(l.title)}</span>\n    <span style=\"color:#888\">${l.views} views · $${l.price}</span>\n  </div>`).join('');\n\nconst noteHtml = coachNote.replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>').replace(/\\n/g, '<br>');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#faf7f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#1a1a1a\">\n<div style=\"max-width:620px;margin:0 auto\">\n\n  <div style=\"background:#c05b2c;color:#fff;padding:20px 28px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#f5c4a8;margin-bottom:5px\">Weekly Shop Report · ${esc(d.weekOf)}</div>\n    <div style=\"font-size:19px;font-weight:700\">${esc(d.shopName)}</div>\n    <div style=\"font-size:13px;color:#f5c4a8;margin-top:3px\">${d.totalListings} active listings · 4-week avg: $${d.avg4.revenue}/week</div>\n  </div>\n\n  <div style=\"background:#fff;padding:20px 28px;border:1px solid #e8e0d8;border-top:none\">\n    <div style=\"display:grid;grid-template-columns:repeat(3,1fr);gap:10px\">${statCards}</div>\n  </div>\n\n  <div style=\"background:#fff;padding:18px 28px;border:1px solid #e8e0d8;border-top:3px solid #f5ede5\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#999;margin-bottom:10px\">Coach's Note</div>\n    <p style=\"font-size:15px;line-height:1.75;color:#333;margin:0\">${noteHtml}</p>\n  </div>\n\n  ${d.topListings.length ? `<div style=\"background:#fff;padding:18px 28px;border:1px solid #e8e0d8;border-top:3px solid #f5ede5\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#999;margin-bottom:10px\">Top listings by views</div>\n    <table style=\"width:100%;border-collapse:collapse\">\n      <thead><tr style=\"font-size:11px;text-transform:uppercase;color:#bbb;letter-spacing:0.3px\">\n        <th style=\"padding:6px 12px;text-align:left\">Listing</th>\n        <th style=\"padding:6px 12px;text-align:right\">Views</th>\n        <th style=\"padding:6px 12px;text-align:right\">Orders</th>\n        <th style=\"padding:6px 12px;text-align:right\">Conv.</th>\n        <th style=\"padding:6px 12px;text-align:right\">Price</th>\n      </tr></thead>\n      <tbody>${topListingRows}</tbody>\n    </table>\n  </div>` : ''}\n\n  ${d.coldListings.length ? `<div style=\"background:#fff8f8;padding:16px 28px;border:1px solid #fce4e4\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#dc2626;margin-bottom:10px\">Getting views, not selling (${d.coldListings.length})</div>\n    ${coldListingRows}\n  </div>` : ''}\n\n  <div style=\"background:#c05b2c;color:#e8b89a;font-size:11px;padding:12px 28px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Etsy Shop Coach · ${esc(d.weekOf)}\n  </div>\n</div>\n</body></html>`;\n\nreturn [{ json: { html, weekOf: d.weekOf, revenue: d.current.revenue, orders: d.current.orders } }];"
+      },
+      "id": "n2q5s8v1-0007",
+      "name": "Build Report Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 340]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$env.SHOP_OWNER_EMAIL}}",
+        "subject": "{{ $('Compute Shop Metrics').first().json.shopName }} · Week of {{ $json.weekOf }} · ${{ $json.revenue }} · {{ $json.orders }} orders",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "n2q5s8v1-0008",
+      "name": "Send Weekly Report",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1300, 260],
+      "credentials": {
+        "smtp": { "id": "smtp-creds-01", "name": "SMTP Account" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['week_ending', 'revenue', 'orders', 'visits', 'views'];\nconst missing = required.filter(f => body[f] === undefined);\nif (missing.length) {\n  return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\n}\nreturn [{ json: { valid: true, ...body } }];"
+      },
+      "id": "n2q5s8v1-0009",
+      "name": "Validate Manual Upload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 540]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.ETSY_SHEET_ID}}",
+        "sheetName": "Weekly Stats",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "week_ending": "={{ $json.week_ending }}",
+            "revenue": "={{ $json.revenue }}",
+            "orders": "={{ $json.orders }}",
+            "visits": "={{ $json.visits }}",
+            "views": "={{ $json.views }}",
+            "favorites": "={{ $json.favorites || 0 }}",
+            "logged_at": "={{ $now.toISO() }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "n2q5s8v1-0010",
+      "name": "Save Manual Stats",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [640, 540],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'saved', week_ending: $json.week_ending } }}"
+      },
+      "id": "n2q5s8v1-0011",
+      "name": "Confirm Upload",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [860, 540]
+    }
+  ],
+  "connections": {
+    "Every Monday 7am": {
+      "main": [
+        [
+          { "node": "Load Stats History", "type": "main", "index": 0 },
+          { "node": "Load Listing Data", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Load Stats History": {
+      "main": [[{ "node": "Compute Shop Metrics", "type": "main", "index": 0 }]]
+    },
+    "Load Listing Data": {
+      "main": [[{ "node": "Compute Shop Metrics", "type": "main", "index": 0 }]]
+    },
+    "Compute Shop Metrics": {
+      "main": [[{ "node": "Claude Shop Coach", "type": "main", "index": 0 }]]
+    },
+    "Claude Shop Coach": {
+      "main": [[{ "node": "Build Report Email", "type": "main", "index": 0 }]]
+    },
+    "Build Report Email": {
+      "main": [[{ "node": "Send Weekly Report", "type": "main", "index": 0 }]]
+    },
+    "Webhook – Manual Stats Upload": {
+      "main": [[{ "node": "Validate Manual Upload", "type": "main", "index": 0 }]]
+    },
+    "Validate Manual Upload": {
+      "main": [[{ "node": "Save Manual Stats", "type": "main", "index": 0 }]]
+    },
+    "Save Manual Stats": {
+      "main": [[{ "node": "Confirm Upload", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": ["ecommerce", "etsy", "small-business", "weekly"],
+  "triggerCount": 1,
+  "updatedAt": "2025-05-02T10:00:00.000Z",
+  "versionId": "v1.0.0"
+}

@@ -1,0 +1,274 @@
+{
+  "name": "Meeting Notes Action Extractor & Follow-up Dispatcher",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "process-meeting",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "m1p4r7t2-0001",
+      "name": "Webhook – Submit Notes",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\n\nconst required = ['meeting_notes', 'meeting_title'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) {\n  return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\n}\n\nif (body.meeting_notes.trim().length < 50) {\n  return [{ json: { valid: false, error: 'Notes too short — paste at least a few sentences' } }];\n}\n\nconst validTypes = ['standup', 'planning', 'retrospective', 'client_call', 'one_on_one', 'all_hands', 'brainstorm', 'interview', 'other'];\nconst meetingType = validTypes.includes(body.meeting_type) ? body.meeting_type : 'other';\n\nreturn [{\n  json: {\n    valid: true,\n    meetingTitle: body.meeting_title.trim(),\n    meetingType,\n    meetingDate: body.meeting_date || new Date().toISOString().split('T')[0],\n    attendees: Array.isArray(body.attendees) ? body.attendees : (body.attendees || '').split(',').map(a => a.trim()).filter(Boolean),\n    meetingNotes: body.meeting_notes.trim().slice(0, 8000),\n    organizerEmail: body.organizer_email || null,\n    sendSummaryTo: Array.isArray(body.send_summary_to) ? body.send_summary_to : (body.send_summary_to || '').split(',').map(e => e.trim()).filter(Boolean),\n    projectName: body.project_name || '',\n    slackChannel: body.slack_channel || null,\n    requestedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "m1p4r7t2-0002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 320]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-v",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "m1p4r7t2-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [640, 320]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "m1p4r7t2-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [860, 480]
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-5",
+        "options": { "temperature": 0.3, "maxTokens": 2500 },
+        "messages": {
+          "values": [
+            {
+              "content": "You extract structured information from meeting notes with precision. You identify action items, decisions, open questions, and blockers. You are specific — you don't paraphrase vaguely. If a name is mentioned with a task, you capture that attribution. If a deadline is mentioned, you capture it exactly.\n\nYou distinguish between things that were decided vs things that are still open. You're conservative — if something is ambiguous, you flag it as needing clarification rather than guessing.\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Extract structured information from these meeting notes.\n\nMeeting: {{ $json.meetingTitle }}\nType: {{ $json.meetingType }}\nDate: {{ $json.meetingDate }}\nAttendees: {{ $json.attendees.join(', ') || 'not specified' }}\nProject: {{ $json.projectName || 'not specified' }}\n\nNotes:\n{{ $json.meetingNotes }}\n\nReturn this JSON:\n{\n  \"meeting_summary\": \"3-4 sentence summary of what happened in this meeting — what was discussed, what was decided, what's the overall status\",\n  \"key_decisions\": [\n    {\n      \"decision\": \"what was decided\",\n      \"rationale\": \"why if mentioned\",\n      \"impact\": \"who or what this affects\"\n    }\n  ],\n  \"action_items\": [\n    {\n      \"id\": \"A1\",\n      \"task\": \"specific task description\",\n      \"owner\": \"person's name or 'unassigned'\",\n      \"due_date\": \"deadline if mentioned or 'not specified'\",\n      \"priority\": \"one of: urgent | high | medium | low\",\n      \"context\": \"why this matters or what it unblocks — one sentence\"\n    }\n  ],\n  \"open_questions\": [\n    {\n      \"question\": \"what still needs to be answered\",\n      \"raised_by\": \"who asked if known\",\n      \"needed_by\": \"when an answer is needed if mentioned\"\n    }\n  ],\n  \"blockers\": [\n    {\n      \"blocker\": \"what is blocking progress\",\n      \"affects\": \"what work or who is blocked\",\n      \"owner\": \"who needs to resolve it\"\n    }\n  ],\n  \"follow_up_meeting_needed\": true or false,\n  \"suggested_next_meeting_agenda\": [\"agenda items for next meeting if relevant — leave empty if not needed\"],\n  \"parking_lot\": [\"topics raised but deliberately deferred — do not confuse with action items\"]\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "m1p4r7t2-0005",
+      "name": "Claude Meeting Extractor",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [860, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet extracted;\ntry {\n  extracted = JSON.parse(raw.replace(/```json|```/g, '').trim());\n} catch(e) {\n  return [{ json: { error: 'Parse error', raw } }];\n}\n\nconst input = $('Validate Input').first().json;\nextracted._meta = {\n  meetingTitle: input.meetingTitle,\n  meetingDate: input.meetingDate,\n  meetingType: input.meetingType,\n  attendees: input.attendees,\n  projectName: input.projectName,\n  organizerEmail: input.organizerEmail,\n  sendSummaryTo: input.sendSummaryTo,\n  slackChannel: input.slackChannel\n};\n\nreturn [{ json: extracted }];"
+      },
+      "id": "m1p4r7t2-0006",
+      "name": "Parse Extraction",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nconst m = d._meta;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst priorityColor = { urgent: '#dc2626', high: '#d97706', medium: '#2563eb', low: '#6b7280' };\nconst priorityBg = { urgent: '#fef2f2', high: '#fffbeb', medium: '#eff6ff', low: '#f9fafb' };\n\nconst actionRows = (d.action_items || []).map(a => `\n  <tr style=\"border-bottom:1px solid #f0f0f0\">\n    <td style=\"padding:10px 12px;font-family:monospace;font-size:12px;color:#888;white-space:nowrap\">${esc(a.id)}</td>\n    <td style=\"padding:10px 12px\">\n      <div style=\"font-size:14px;font-weight:500;color:#1a1a1a\">${esc(a.task)}</div>\n      ${a.context ? `<div style=\"font-size:12px;color:#888;margin-top:3px\">${esc(a.context)}</div>` : ''}\n    </td>\n    <td style=\"padding:10px 12px;font-size:13px;color:#555;white-space:nowrap\">${esc(a.owner)}</td>\n    <td style=\"padding:10px 12px;font-size:13px;color:#555;white-space:nowrap\">${esc(a.due_date)}</td>\n    <td style=\"padding:10px 12px\">\n      <span style=\"background:${priorityBg[a.priority]||'#f9fafb'};color:${priorityColor[a.priority]||'#6b7280'};font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;text-transform:uppercase\">${esc(a.priority)}</span>\n    </td>\n  </tr>`).join('');\n\nconst decisionBlocks = (d.key_decisions || []).map(dec =>\n  `<div style=\"padding:10px 0;border-bottom:1px solid #f0fdf4\">\n    <div style=\"font-size:14px;font-weight:600;color:#1a1a1a\">${esc(dec.decision)}</div>\n    ${dec.rationale ? `<div style=\"font-size:13px;color:#555;margin-top:3px\">${esc(dec.rationale)}</div>` : ''}\n    ${dec.impact ? `<div style=\"font-size:12px;color:#888;margin-top:2px\">Affects: ${esc(dec.impact)}</div>` : ''}\n  </div>`).join('');\n\nconst questionBlocks = (d.open_questions || []).map(q =>\n  `<div style=\"font-size:14px;padding:7px 0;border-bottom:1px solid #fef9c3;color:#555\">\n    ❓ ${esc(q.question)}\n    ${q.raised_by ? `<span style=\"font-size:12px;color:#aaa\"> — raised by ${esc(q.raised_by)}</span>` : ''}\n    ${q.needed_by ? `<span style=\"font-size:12px;color:#d97706\"> · needed by ${esc(q.needed_by)}</span>` : ''}\n  </div>`).join('');\n\nconst blockerBlocks = (d.blockers || []).map(b =>\n  `<div style=\"border-left:3px solid #dc2626;padding:8px 14px;background:#fef2f2;border-radius:0 4px 4px 0;margin-bottom:8px\">\n    <div style=\"font-size:14px;font-weight:600;color:#7f1d1d\">${esc(b.blocker)}</div>\n    <div style=\"font-size:12px;color:#991b1b;margin-top:2px\">Blocks: ${esc(b.affects)} · Owner: ${esc(b.owner)}</div>\n  </div>`).join('');\n\nconst urgentCount = (d.action_items||[]).filter(a => a.priority === 'urgent').length;\nconst unassignedCount = (d.action_items||[]).filter(a => a.owner === 'unassigned').length;\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f5f5f3;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#1a1a1a\">\n<div style=\"max-width:700px;margin:0 auto\">\n\n  <div style=\"background:#18181b;color:#fff;padding:20px 28px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#71717a;margin-bottom:5px\">${esc(m.meetingType.replace(/_/g,' '))} · ${esc(m.meetingDate)}${m.projectName ? ' · ' + esc(m.projectName) : ''}</div>\n    <div style=\"font-size:19px;font-weight:700\">${esc(m.meetingTitle)}</div>\n    <div style=\"margin-top:8px;font-size:13px;color:#a1a1aa\">\n      ${(d.action_items||[]).length} action items\n      ${urgentCount > 0 ? ` · <span style=\"color:#f87171\">${urgentCount} urgent</span>` : ''}\n      ${unassignedCount > 0 ? ` · <span style=\"color:#fbbf24\">${unassignedCount} unassigned</span>` : ''}\n      ${(d.blockers||[]).length > 0 ? ` · <span style=\"color:#f87171\">${d.blockers.length} blocker${d.blockers.length > 1 ? 's' : ''}</span>` : ''}\n    </div>\n  </div>\n\n  <div style=\"background:#fff;padding:18px 28px;border:1px solid #eee;border-top:none\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#888;margin-bottom:8px\">Summary</div>\n    <p style=\"font-size:15px;line-height:1.7;color:#333;margin:0\">${esc(d.meeting_summary)}</p>\n  </div>\n\n  ${(d.action_items||[]).length ? `<div style=\"background:#fff;padding:18px 28px;border:1px solid #eee;border-top:3px solid #f0f0f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#888;margin-bottom:12px\">Action items</div>\n    <table style=\"width:100%;border-collapse:collapse\">\n      <thead><tr style=\"background:#f8f8f8;font-size:11px;text-transform:uppercase;color:#aaa;letter-spacing:0.3px\">\n        <th style=\"padding:7px 12px;text-align:left\">#</th>\n        <th style=\"padding:7px 12px;text-align:left\">Task</th>\n        <th style=\"padding:7px 12px;text-align:left\">Owner</th>\n        <th style=\"padding:7px 12px;text-align:left\">Due</th>\n        <th style=\"padding:7px 12px;text-align:left\">Priority</th>\n      </tr></thead>\n      <tbody>${actionRows}</tbody>\n    </table>\n  </div>` : ''}\n\n  ${(d.key_decisions||[]).length ? `<div style=\"background:#f0fdf4;padding:18px 28px;border:1px solid #bbf7d0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#16a34a;margin-bottom:10px\">✅ Decisions made</div>\n    ${decisionBlocks}\n  </div>` : ''}\n\n  ${(d.blockers||[]).length ? `<div style=\"background:#fff;padding:18px 28px;border:1px solid #eee;border-top:3px solid #f0f0f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#dc2626;margin-bottom:10px\">🚧 Blockers</div>\n    ${blockerBlocks}\n  </div>` : ''}\n\n  ${(d.open_questions||[]).length ? `<div style=\"background:#fefce8;padding:18px 28px;border:1px solid #fde68a\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#92400e;margin-bottom:10px\">Open questions</div>\n    ${questionBlocks}\n  </div>` : ''}\n\n  ${(d.parking_lot||[]).length ? `<div style=\"background:#fff;padding:14px 28px;border:1px solid #eee;border-top:3px solid #f0f0f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9ca3af;margin-bottom:8px\">Parking lot</div>\n    ${d.parking_lot.map(p => `<div style=\"font-size:13px;color:#6b7280;padding:4px 0\">${esc(p)}</div>`).join('')}\n  </div>` : ''}\n\n  ${d.follow_up_meeting_needed && (d.suggested_next_meeting_agenda||[]).length ? `<div style=\"background:#f5f3ff;padding:14px 28px;border:1px solid #ddd6fe\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#7c3aed;margin-bottom:8px\">Suggested next meeting agenda</div>\n    ${d.suggested_next_meeting_agenda.map((item, i) => `<div style=\"font-size:14px;color:#555;padding:4px 0\">${i+1}. ${esc(item)}</div>`).join('')}\n  </div>` : ''}\n\n  <div style=\"background:#18181b;color:#555;font-size:11px;padding:12px 28px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Meeting Notes Extractor · ${esc(m.meetingDate)}${m.attendees.length ? ' · ' + esc(m.attendees.join(', ')) : ''}\n  </div>\n</div>\n</body></html>`;\n\nreturn [{ json: { html, actionCount: (d.action_items||[]).length, urgentCount, blockerCount: (d.blockers||[]).length, sendSummaryTo: m.sendSummaryTo, slackChannel: m.slackChannel, meetingTitle: m.meetingTitle, extracted: d } }];"
+      },
+      "id": "m1p4r7t2-0007",
+      "name": "Build Summary Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 240]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-emails",
+              "leftValue": "={{ $json.sendSummaryTo.length }}",
+              "rightValue": 0,
+              "operator": { "type": "number", "operation": "gt" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "m1p4r7t2-0008",
+      "name": "Send to Attendees?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1520, 180]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{ $json.sendSummaryTo.join(',') }}",
+        "subject": "[Meeting Summary] {{ $json.meetingTitle }} — {{ $json.actionCount }} actions{{ $json.urgentCount > 0 ? ', ' + $json.urgentCount + ' urgent' : '' }}{{ $json.blockerCount > 0 ? ', ' + $json.blockerCount + ' blocker' + ($json.blockerCount > 1 ? 's' : '') : '' }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "m1p4r7t2-0009",
+      "name": "Email Summary",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1740, 120],
+      "credentials": {
+        "smtp": { "id": "smtp-creds-01", "name": "SMTP Account" }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-slack",
+              "leftValue": "={{ $json.slackChannel || '' }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "m1p4r7t2-0010",
+      "name": "Post to Slack?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1520, 360]
+    },
+    {
+      "parameters": {
+        "channel": "={{ $('Build Summary Email').first().json.slackChannel }}",
+        "text": "📋 *Meeting Summary: {{ $('Build Summary Email').first().json.meetingTitle }}*\n\n{{ $('Parse Extraction').first().json.meeting_summary }}\n\n*Action items ({{ $('Build Summary Email').first().json.actionCount }}):*\n{{ ($('Parse Extraction').first().json.action_items || []).map(a => `• ${a.id} ${a.task} — *${a.owner}*${a.due_date !== 'not specified' ? ' · ' + a.due_date : ''}${a.priority === 'urgent' ? ' 🔴' : ''}`).join('\\n') }}\n{{ ($('Parse Extraction').first().json.blockers || []).length > 0 ? '\\n🚧 *Blockers:*\\n' + $('Parse Extraction').first().json.blockers.map(b => '• ' + b.blocker).join('\\n') : '' }}",
+        "otherOptions": {}
+      },
+      "id": "m1p4r7t2-0011",
+      "name": "Post to Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1740, 360],
+      "credentials": {
+        "slackApi": { "id": "slack-creds-01", "name": "Slack Account" }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.MEETINGS_SHEET_ID}}",
+        "sheetName": "Action Items",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "meeting_date": "={{ $('Validate Input').first().json.meetingDate }}",
+            "meeting_title": "={{ $('Validate Input').first().json.meetingTitle }}",
+            "action_items_json": "={{ JSON.stringify($('Parse Extraction').first().json.action_items || []) }}",
+            "total_actions": "={{ ($('Parse Extraction').first().json.action_items || []).length }}",
+            "urgent_actions": "={{ ($('Parse Extraction').first().json.action_items || []).filter(a => a.priority === 'urgent').length }}",
+            "blockers_count": "={{ ($('Parse Extraction').first().json.blockers || []).length }}",
+            "logged_at": "={{ $now.toISO() }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "m1p4r7t2-0012",
+      "name": "Log to Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [1960, 240],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'processed', action_items: $('Parse Extraction').first().json.action_items, decisions: $('Parse Extraction').first().json.key_decisions, blockers: $('Parse Extraction').first().json.blockers, open_questions: $('Parse Extraction').first().json.open_questions, summary: $('Parse Extraction').first().json.meeting_summary } }}"
+      },
+      "id": "m1p4r7t2-0013",
+      "name": "Return Extraction",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2180, 240]
+    }
+  ],
+  "connections": {
+    "Webhook – Submit Notes": {
+      "main": [[{ "node": "Validate Input", "type": "main", "index": 0 }]]
+    },
+    "Validate Input": {
+      "main": [[{ "node": "Valid?", "type": "main", "index": 0 }]]
+    },
+    "Valid?": {
+      "main": [
+        [{ "node": "Claude Meeting Extractor", "type": "main", "index": 0 }],
+        [{ "node": "Return Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Claude Meeting Extractor": {
+      "main": [[{ "node": "Parse Extraction", "type": "main", "index": 0 }]]
+    },
+    "Parse Extraction": {
+      "main": [[{ "node": "Build Summary Email", "type": "main", "index": 0 }]]
+    },
+    "Build Summary Email": {
+      "main": [
+        [
+          { "node": "Send to Attendees?", "type": "main", "index": 0 },
+          { "node": "Post to Slack?", "type": "main", "index": 0 },
+          { "node": "Log to Sheets", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Send to Attendees?": {
+      "main": [
+        [{ "node": "Email Summary", "type": "main", "index": 0 }],
+        [{ "node": "Return Extraction", "type": "main", "index": 0 }]
+      ]
+    },
+    "Email Summary": {
+      "main": [[{ "node": "Return Extraction", "type": "main", "index": 0 }]]
+    },
+    "Post to Slack?": {
+      "main": [
+        [{ "node": "Post to Slack", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Log to Sheets": {
+      "main": [[{ "node": "Return Extraction", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": ["meetings", "productivity", "team", "action-items"],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-02T09:00:00.000Z",
+  "versionId": "v1.0.0"
+}
