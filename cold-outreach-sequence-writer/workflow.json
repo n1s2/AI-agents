@@ -1,0 +1,193 @@
+{
+  "name": "Cold Outreach Sequence Writer Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "write-outreach",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "s7v1y4b6-0001",
+      "name": "Webhook – Request Sequence",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\n\nconst required = ['sender_name', 'sender_company', 'sender_value_prop', 'target_role', 'target_industry'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) {\n  return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\n}\n\nconst tones = ['direct', 'warm', 'formal', 'casual', 'challenger'];\nconst tone = tones.includes(body.tone) ? body.tone : 'direct';\n\nreturn [{\n  json: {\n    valid: true,\n    senderName: body.sender_name.trim(),\n    senderCompany: body.sender_company.trim(),\n    senderRole: body.sender_role || '',\n    senderValueProp: body.sender_value_prop.trim().slice(0, 600),\n    targetRole: body.target_role.trim(),\n    targetIndustry: body.target_industry.trim(),\n    targetPainPoints: (body.target_pain_points || '').slice(0, 400),\n    specificProspect: body.specific_prospect || null,\n    specificCompany: body.specific_company || null,\n    tone,\n    sequenceLength: Math.min(5, Math.max(2, parseInt(body.sequence_length) || 3)),\n    channelOrder: Array.isArray(body.channel_order)\n      ? body.channel_order\n      : ['email', 'email', 'linkedin', 'email'],\n    socialProof: (body.social_proof || '').slice(0, 300),\n    callToAction: body.call_to_action || '15-minute call',\n    replyEmail: body.reply_email || null,\n    requestedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "s7v1y4b6-0002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 320]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-v",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "s7v1y4b6-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [640, 320]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "s7v1y4b6-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [860, 480]
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-5",
+        "options": { "temperature": 0.72, "maxTokens": 3000 },
+        "messages": {
+          "values": [
+            {
+              "content": "You write cold outreach sequences that actually get responses. You understand that most cold outreach fails because it's about the sender, not the recipient. Good outreach is specific, brief, and makes the value immediately clear without overselling.\n\nYou write each touchpoint in the sequence as a distinct message — not variations of the same pitch. The first message earns attention. Follow-ups acknowledge the previous message, add a new angle or piece of value, and don't beg.\n\nTone options:\n- direct: confident, no fluff, gets to the point fast\n- warm: friendly and human, still professional\n- formal: more corporate/conservative language\n- casual: like one professional texting another\n- challenger: leads with a provocative insight or contrarian observation\n\nNever use these phrases: 'I hope this finds you well', 'I wanted to reach out', 'touching base', 'circle back', 'synergy', 'leverage', 'at the end of the day'.\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Write a cold outreach sequence.\n\nSender: {{ $json.senderName }}{{ $json.senderRole ? ', ' + $json.senderRole : '' }} at {{ $json.senderCompany }}\nValue proposition: {{ $json.senderValueProp }}\nSocial proof: {{ $json.socialProof || 'none provided' }}\n\nTarget: {{ $json.targetRole }} in {{ $json.targetIndustry }}\n{{ $json.specificProspect ? 'Specific prospect name: ' + $json.specificProspect : 'Generic — write for the archetype, not a specific person' }}\n{{ $json.specificCompany ? 'Specific company: ' + $json.specificCompany : '' }}\nKnown pain points: {{ $json.targetPainPoints || 'infer from role and industry' }}\n\nTone: {{ $json.tone }}\nSequence length: {{ $json.sequenceLength }} touchpoints\nChannel order: {{ $json.channelOrder.slice(0, $json.sequenceLength).join(' → ') }}\nDesired CTA: {{ $json.callToAction }}\n\nWrite the full sequence as this JSON:\n{\n  \"sequence_overview\": \"one sentence on the overall strategy and angle for this sequence\",\n  \"touchpoints\": [\n    {\n      \"step\": 1,\n      \"channel\": \"email or linkedin\",\n      \"send_timing\": \"Day 1 / Day 5 / etc.\",\n      \"subject_line\": \"email subject line — null for linkedin\",\n      \"message\": \"the full message body — no placeholders like [NAME], use the actual prospect name or role if not personalized. Keep emails under 100 words. LinkedIn notes under 300 chars. Follow-ups under 80 words.\",\n      \"purpose\": \"what this touchpoint is trying to accomplish\",\n      \"writing_notes\": \"what makes this message work — why this angle, why this length\"\n    }\n  ],\n  \"personalization_hooks\": [\"3-5 specific things to research about each prospect before sending — what to look for and where\"],\n  \"objection_responses\": [\n    {\n      \"objection\": \"common objection for this type of outreach\",\n      \"response\": \"how to respond in 2-3 sentences\"\n    }\n  ],\n  \"what_not_to_do\": [\"2-3 common mistakes for this specific sender/target combination\"]\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "s7v1y4b6-0005",
+      "name": "Claude Sequence Writer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [860, 260]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet sequence;\ntry {\n  sequence = JSON.parse(raw.replace(/```json|```/g, '').trim());\n} catch(e) {\n  return [{ json: { error: 'Parse error', raw } }];\n}\nconst input = $('Validate Input').first().json;\nsequence._meta = {\n  senderName: input.senderName,\n  senderCompany: input.senderCompany,\n  targetRole: input.targetRole,\n  targetIndustry: input.targetIndustry,\n  tone: input.tone,\n  replyEmail: input.replyEmail\n};\nreturn [{ json: sequence }];"
+      },
+      "id": "s7v1y4b6-0006",
+      "name": "Parse Sequence",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 260]
+    },
+    {
+      "parameters": {
+        "jsCode": "const s = $input.first().json;\nconst m = s._meta;\nfunction esc(t) { return String(t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst channelBadge = (ch) => ch === 'email'\n  ? `<span style=\"background:#dbeafe;color:#1d4ed8;font-size:10px;font-weight:700;padding:2px 7px;border-radius:8px;text-transform:uppercase\">Email</span>`\n  : `<span style=\"background:#e0f2fe;color:#0369a1;font-size:10px;font-weight:700;padding:2px 7px;border-radius:8px;text-transform:uppercase\">LinkedIn</span>`;\n\nconst touchpointCards = (s.touchpoints || []).map((t, i) => `\n  <div style=\"border:1px solid #e5e7eb;border-radius:8px;margin-bottom:16px;overflow:hidden\">\n    <div style=\"background:#f9fafb;padding:10px 18px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #e5e7eb\">\n      <div style=\"display:flex;align-items:center;gap:10px\">\n        <span style=\"background:#111;color:#fff;font-family:monospace;font-size:12px;font-weight:700;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center\">${t.step}</span>\n        ${channelBadge(t.channel)}\n        <span style=\"font-size:12px;color:#6b7280\">${esc(t.send_timing)}</span>\n      </div>\n      <span style=\"font-size:12px;color:#9ca3af;font-style:italic\">${esc(t.purpose)}</span>\n    </div>\n    <div style=\"padding:14px 18px\">\n      ${t.subject_line ? `<div style=\"font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:#6b7280;margin-bottom:4px\">Subject</div>\n      <div style=\"font-size:14px;font-weight:600;color:#111;margin-bottom:12px\">${esc(t.subject_line)}</div>` : ''}\n      <div style=\"font-size:14px;line-height:1.75;white-space:pre-wrap;color:#374151;background:#fafafa;padding:14px;border-radius:6px;border-left:3px solid #e5e7eb\">${esc(t.message)}</div>\n      <div style=\"margin-top:10px;font-size:12px;color:#9ca3af;font-style:italic\">✍ ${esc(t.writing_notes)}</div>\n    </div>\n  </div>`).join('');\n\nconst hookList = (s.personalization_hooks || []).map(h =>\n  `<li style=\"font-size:14px;margin-bottom:8px;line-height:1.55\">${esc(h)}</li>`).join('');\n\nconst objectionCards = (s.objection_responses || []).map(o =>\n  `<div style=\"border-left:3px solid #f59e0b;padding:10px 14px;background:#fffbeb;border-radius:0 6px 6px 0;margin-bottom:10px\">\n    <div style=\"font-size:13px;font-weight:700;color:#92400e;margin-bottom:4px\">${esc(o.objection)}</div>\n    <div style=\"font-size:13px;color:#555;line-height:1.55\">${esc(o.response)}</div>\n  </div>`).join('');\n\nconst dontList = (s.what_not_to_do || []).map(d =>\n  `<li style=\"font-size:14px;margin-bottom:6px;color:#6b7280\">${esc(d)}</li>`).join('');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111\">\n<div style=\"max-width:680px;margin:0 auto\">\n  <div style=\"background:#111;color:#fff;padding:20px 28px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#6b7280;margin-bottom:5px\">Outreach Sequence · ${esc(m.tone)} tone</div>\n    <div style=\"font-size:18px;font-weight:700\">${esc(m.senderCompany)} → ${esc(m.targetRole)}, ${esc(m.targetIndustry)}</div>\n    <div style=\"font-size:13px;color:#6b7280;margin-top:4px\">${(s.touchpoints||[]).length} touchpoints · ${esc(s.sequence_overview)}</div>\n  </div>\n\n  <div style=\"background:#fff;padding:20px 28px;border:1px solid #e5e7eb;border-top:none\">\n    ${touchpointCards}\n  </div>\n\n  <div style=\"background:#fff;padding:18px 28px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9ca3af;margin-bottom:10px\">Before you send — research each prospect</div>\n    <ul style=\"padding-left:18px;margin:0\">${hookList}</ul>\n  </div>\n\n  <div style=\"background:#fff;padding:18px 28px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9ca3af;margin-bottom:10px\">When they push back</div>\n    ${objectionCards}\n  </div>\n\n  <div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9ca3af;margin-bottom:8px\">What not to do</div>\n    <ul style=\"padding-left:18px;margin:0\">${dontList}</ul>\n  </div>\n\n  <div style=\"background:#111;color:#4b5563;font-size:11px;padding:12px 28px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Cold Outreach Sequence Writer · ${new Date().toLocaleDateString()}\n  </div>\n</div>\n</body></html>`;\n\nreturn [{ json: { html, replyEmail: m.replyEmail, senderCompany: m.senderCompany, targetRole: m.targetRole, sequence: s } }];"
+      },
+      "id": "s7v1y4b6-0007",
+      "name": "Build Sequence Doc",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 260]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-email",
+              "leftValue": "={{ $json.replyEmail }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "s7v1y4b6-0008",
+      "name": "Has Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1520, 260]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.replyEmail}}",
+        "subject": "Outreach sequence: {{ $json.senderCompany }} → {{ $json.targetRole }} ({{ $json.sequence.touchpoints.length }} steps)",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "s7v1y4b6-0009",
+      "name": "Email Sequence",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1740, 200],
+      "credentials": {
+        "smtp": { "id": "smtp-creds-01", "name": "SMTP Account" }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'generated', touchpoints: $json.sequence.touchpoints.length, emailed: $json.replyEmail ? true : false, sequence: $json.sequence } }}"
+      },
+      "id": "s7v1y4b6-0010",
+      "name": "Return Sequence",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1960, 260]
+    }
+  ],
+  "connections": {
+    "Webhook – Request Sequence": {
+      "main": [[{ "node": "Validate Input", "type": "main", "index": 0 }]]
+    },
+    "Validate Input": {
+      "main": [[{ "node": "Valid?", "type": "main", "index": 0 }]]
+    },
+    "Valid?": {
+      "main": [
+        [{ "node": "Claude Sequence Writer", "type": "main", "index": 0 }],
+        [{ "node": "Return Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Claude Sequence Writer": {
+      "main": [[{ "node": "Parse Sequence", "type": "main", "index": 0 }]]
+    },
+    "Parse Sequence": {
+      "main": [[{ "node": "Build Sequence Doc", "type": "main", "index": 0 }]]
+    },
+    "Build Sequence Doc": {
+      "main": [[{ "node": "Has Email?", "type": "main", "index": 0 }]]
+    },
+    "Has Email?": {
+      "main": [
+        [{ "node": "Email Sequence", "type": "main", "index": 0 }],
+        [{ "node": "Return Sequence", "type": "main", "index": 0 }]
+      ]
+    },
+    "Email Sequence": {
+      "main": [[{ "node": "Return Sequence", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": ["sales", "outreach", "copywriting", "sequences"],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-04T09:00:00.000Z",
+  "versionId": "v1.0.0"
+}

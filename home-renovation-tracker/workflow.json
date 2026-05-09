@@ -1,0 +1,338 @@
+{
+  "name": "Home Renovation Project Tracker & Contractor Briefer",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "reno-project",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "t8w2z5c7-0001",
+      "name": "Webhook – Log Project Event",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 280]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "reno-brief",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "t8w2z5c7-0002",
+      "name": "Webhook – Generate Brief",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 520]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['project_id', 'event_type', 'description'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) {\n  return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\n}\n\nconst eventTypes = ['milestone', 'issue', 'payment', 'decision', 'delay', 'inspection', 'quote_received', 'work_completed', 'material_ordered', 'note'];\nconst eventType = eventTypes.includes(body.event_type) ? body.event_type : 'note';\n\nconst amount = body.amount ? parseFloat(body.amount) : null;\n\nreturn [{\n  json: {\n    valid: true,\n    mode: 'log',\n    eventId: `EV-${Date.now()}`,\n    projectId: body.project_id.trim(),\n    eventType,\n    description: body.description.trim().slice(0, 800),\n    amount,\n    vendor: body.vendor || '',\n    phase: body.phase || '',\n    isBlocker: body.is_blocker === true || body.is_blocker === 'true',\n    photoUrls: Array.isArray(body.photo_urls) ? body.photo_urls.slice(0, 3) : [],\n    eventDate: body.event_date || new Date().toISOString().split('T')[0],\n    loggedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "t8w2z5c7-0003",
+      "name": "Validate Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 280]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['project_id', 'project_name', 'scope_description', 'contractor_trade'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) {\n  return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\n}\nreturn [{\n  json: {\n    valid: true,\n    mode: 'brief',\n    projectId: body.project_id.trim(),\n    projectName: body.project_name.trim(),\n    scopeDescription: body.scope_description.trim().slice(0, 2000),\n    contractorTrade: body.contractor_trade.trim(),\n    contractorName: body.contractor_name || '',\n    houseDetails: (body.house_details || '').slice(0, 600),\n    budget: body.budget || '',\n    timeline: body.timeline || '',\n    specificRequirements: (body.specific_requirements || '').slice(0, 600),\n    materialsPreference: body.materials_preference || '',\n    accessDetails: (body.access_details || '').slice(0, 300),\n    replyEmail: body.reply_email || null,\n    requestedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "t8w2z5c7-0004",
+      "name": "Validate Brief Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 520]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-ev",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "t8w2z5c7-0005",
+      "name": "Event Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [640, 280]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-bv",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "t8w2z5c7-0006",
+      "name": "Brief Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [640, 520]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.RENO_SHEET_ID}}",
+        "sheetName": "Events",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "event_id": "={{ $json.eventId }}",
+            "event_date": "={{ $json.eventDate }}",
+            "project_id": "={{ $json.projectId }}",
+            "event_type": "={{ $json.eventType }}",
+            "description": "={{ $json.description }}",
+            "amount": "={{ $json.amount }}",
+            "vendor": "={{ $json.vendor }}",
+            "phase": "={{ $json.phase }}",
+            "is_blocker": "={{ $json.isBlocker }}",
+            "logged_at": "={{ $json.loggedAt }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "t8w2z5c7-0007",
+      "name": "Save Event",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [860, 200],
+      "credentials": {
+        "googleSheetsOAuth2Api": { "id": "google-creds-01", "name": "Google Sheets" }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.RENO_SHEET_ID}}",
+        "sheetName": "Events",
+        "options": {}
+      },
+      "id": "t8w2z5c7-0008",
+      "name": "Load Project Events",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [860, 340],
+      "credentials": {
+        "googleSheetsOAuth2Api": { "id": "google-creds-01", "name": "Google Sheets" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const allEvents = $('Load Project Events').all().map(r => r.json);\nconst current = $('Validate Event').first().json;\n\nconst projectEvents = allEvents\n  .filter(e => e.project_id === current.projectId && e.event_id !== current.eventId)\n  .sort((a, b) => new Date(b.event_date) - new Date(a.event_date));\n\nconst totalSpent = projectEvents\n  .filter(e => e.amount && parseFloat(e.amount) > 0)\n  .reduce((s, e) => s + parseFloat(e.amount), 0);\n\nconst blockers = projectEvents.filter(e => e.is_blocker === 'TRUE' || e.is_blocker === true);\nconst recentEvents = projectEvents.slice(0, 8);\n\nreturn [{\n  json: {\n    current,\n    projectId: current.projectId,\n    totalSpent: parseFloat(totalSpent.toFixed(2)),\n    activeBlockers: blockers.filter(b => b.resolved !== 'TRUE').length,\n    totalEvents: projectEvents.length,\n    recentEvents,\n    currency: $env.RENO_CURRENCY || 'USD'\n  }\n}];"
+      },
+      "id": "t8w2z5c7-0009",
+      "name": "Compute Project State",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 280]
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nconst cur = d.currency;\nconst ev = d.current;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst eventTypeConfig = {\n  milestone:        { color: '#16a34a', bg: '#f0fdf4', icon: '🏁' },\n  issue:            { color: '#dc2626', bg: '#fef2f2', icon: '⚠️' },\n  payment:          { color: '#2563eb', bg: '#eff6ff', icon: '💳' },\n  decision:         { color: '#7c3aed', bg: '#f5f3ff', icon: '✅' },\n  delay:            { color: '#d97706', bg: '#fffbeb', icon: '⏱' },\n  inspection:       { color: '#0369a1', bg: '#e0f2fe', icon: '🔍' },\n  quote_received:   { color: '#0891b2', bg: '#ecfeff', icon: '📋' },\n  work_completed:   { color: '#16a34a', bg: '#f0fdf4', icon: '✔️' },\n  material_ordered: { color: '#9333ea', bg: '#faf5ff', icon: '📦' },\n  note:             { color: '#6b7280', bg: '#f9fafb', icon: '📝' }\n};\nconst ec = eventTypeConfig[ev.eventType] || eventTypeConfig.note;\n\nconst recentRows = d.recentEvents.map(e => {\n  const cfg = eventTypeConfig[e.event_type] || eventTypeConfig.note;\n  return `<div style=\"display:flex;gap:12px;padding:8px 0;border-bottom:1px solid #f3f4f6;align-items:flex-start\">\n    <span style=\"font-size:14px;margin-top:1px\">${cfg.icon}</span>\n    <div style=\"flex:1\">\n      <div style=\"font-size:13px;color:#374151;line-height:1.5\">${esc(e.description)}</div>\n      <div style=\"font-size:11px;color:#9ca3af;margin-top:2px\">${esc(e.event_date)}${e.vendor ? ' · ' + esc(e.vendor) : ''}${e.amount ? ' · ' + cur + parseFloat(e.amount).toFixed(2) : ''}</div>\n    </div>\n  </div>`;\n}).join('');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head>\n<body style=\"margin:0;padding:16px;background:#f9fafb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111\">\n<div style=\"max-width:560px;margin:0 auto\">\n  <div style=\"background:#1c1917;color:#fff;padding:18px 24px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#78716c;margin-bottom:4px\">Project Log · ${esc(ev.projectId)}</div>\n    <div style=\"font-size:18px;font-weight:700\">${ec.icon} ${esc(ev.eventType.replace(/_/g,' '))}</div>\n    <div style=\"font-size:12px;color:#78716c;margin-top:3px\">${esc(ev.eventDate)}${ev.isBlocker ? ' · <span style=\"color:#f87171\">⚡ BLOCKER</span>' : ''}</div>\n  </div>\n  <div style=\"background:${ec.bg};border:1px solid ${ec.color}33;padding:16px 24px\">\n    <p style=\"font-size:15px;line-height:1.7;color:#1c1917;margin:0\">${esc(ev.description)}</p>\n    ${ev.amount ? `<div style=\"margin-top:10px;font-size:14px;font-weight:700;color:${ec.color}\">${cur} ${parseFloat(ev.amount).toFixed(2)}${ev.vendor ? ' · ' + esc(ev.vendor) : ''}</div>` : ''}\n  </div>\n  <div style=\"background:#fff;padding:16px 24px;border:1px solid #e5e7eb;border-top:none\">\n    <div style=\"display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;font-size:13px;text-align:center\">\n      <div><div style=\"color:#9ca3af;font-size:11px;text-transform:uppercase\">Total spent</div><strong>${cur} ${d.totalSpent.toFixed(2)}</strong></div>\n      <div><div style=\"color:#9ca3af;font-size:11px;text-transform:uppercase\">Events logged</div><strong>${d.totalEvents + 1}</strong></div>\n      <div><div style=\"color:${d.activeBlockers > 0 ? '#dc2626' : '#9ca3af'};font-size:11px;text-transform:uppercase\">Blockers</div><strong style=\"color:${d.activeBlockers > 0 ? '#dc2626' : '#111'}\">${d.activeBlockers}</strong></div>\n    </div>\n  </div>\n  ${recentRows ? `<div style=\"background:#fff;padding:16px 24px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;letter-spacing:0.4px;margin-bottom:8px\">Recent activity</div>\n    ${recentRows}\n  </div>` : ''}\n  <div style=\"background:#1c1917;color:#57534e;font-size:11px;padding:10px 24px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Home Reno Tracker · ${esc(ev.projectId)}\n  </div>\n</div>\n</body></html>`;\n\nreturn [{ json: { html, projectId: ev.projectId, isBlocker: ev.isBlocker, eventType: ev.eventType } }];"
+      },
+      "id": "t8w2z5c7-0010",
+      "name": "Build Event Confirmation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 280]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'logged', event_id: $('Validate Event').first().json.eventId, event_type: $('Validate Event').first().json.eventType, total_spent: $('Compute Project State').first().json.totalSpent, active_blockers: $('Compute Project State').first().json.activeBlockers } }}"
+      },
+      "id": "t8w2z5c7-0011",
+      "name": "Return Event Confirmation",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1520, 280]
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-5",
+        "options": { "temperature": 0.4, "maxTokens": 2000 },
+        "messages": {
+          "values": [
+            {
+              "content": "You write clear, professional contractor briefing documents for homeowners. You understand that good briefs save time and money by reducing ambiguity — a contractor who arrives knowing exactly what's expected makes fewer assumptions and asks fewer clarifying questions mid-job.\n\nYou write specifically for the trade involved. A brief for a plumber looks different from one for an electrician or a tiler. You include what they need to prepare, what access they'll have, what the homeowner cares about most, and what specific outcomes define success.\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Write a contractor briefing document.\n\nProject: {{ $json.projectName }} (ID: {{ $json.projectId }})\nTrade: {{ $json.contractorTrade }}{{ $json.contractorName ? ' — Contractor: ' + $json.contractorName : '' }}\nBudget: {{ $json.budget || 'not specified' }}\nTimeline: {{ $json.timeline || 'not specified' }}\n\nScope:\n{{ $json.scopeDescription }}\n\nHouse details:\n{{ $json.houseDetails || 'not provided' }}\n\nSpecific requirements:\n{{ $json.specificRequirements || 'none' }}\n\nMaterials preference:\n{{ $json.materialsPreference || 'not specified' }}\n\nAccess details:\n{{ $json.accessDetails || 'not specified' }}\n\nGenerate this JSON:\n{\n  \"brief_title\": \"short descriptive title for this brief\",\n  \"project_summary\": \"2-3 sentences summarizing the job — what needs to be done, what the end state looks like, and any key constraints\",\n  \"scope_of_work\": [\n    {\n      \"item\": \"specific task or deliverable\",\n      \"details\": \"what exactly is needed, any specs or preferences\",\n      \"priority\": \"must_have | nice_to_have\"\n    }\n  ],\n  \"out_of_scope\": [\"things that are explicitly NOT part of this job — prevents scope creep\"],\n  \"site_conditions\": \"what the contractor will find when they arrive — access, existing conditions, any quirks\",\n  \"materials\": {\n    \"supplied_by_homeowner\": [\"materials the homeowner is providing\"],\n    \"supplied_by_contractor\": [\"materials contractor should source and price\"],\n    \"specifications\": \"any specific brands, grades, or standards required\"\n  },\n  \"access_and_logistics\": \"practical details about how to access the property, parking, working hours, where to store materials\",\n  \"success_criteria\": [\"how the homeowner will know the job is done correctly — specific, measurable where possible\"],\n  \"questions_to_answer_in_quote\": [\"specific questions the homeowner wants addressed in the quote — things that will affect their decision\"],\n  \"timeline_expectations\": \"what the homeowner expects in terms of start date, duration, and any hard deadlines\",\n  \"communication_preferences\": \"how the homeowner wants to be updated during the job\",\n  \"warnings_for_contractor\": [\"anything the contractor should know to avoid surprises — old pipes, asbestos era house, quirky existing work, pet on premises, etc.\"]\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "t8w2z5c7-0012",
+      "name": "Claude Brief Writer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [860, 520]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet brief;\ntry {\n  brief = JSON.parse(raw.replace(/```json|```/g, '').trim());\n} catch(e) {\n  return [{ json: { error: 'Parse error', raw } }];\n}\nconst input = $('Validate Brief Request').first().json;\nbrief._meta = {\n  projectName: input.projectName,\n  contractorTrade: input.contractorTrade,\n  contractorName: input.contractorName,\n  budget: input.budget,\n  replyEmail: input.replyEmail\n};\nreturn [{ json: brief }];"
+      },
+      "id": "t8w2z5c7-0013",
+      "name": "Parse Brief",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 520]
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $input.first().json;\nconst m = b._meta;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst scopeRows = (b.scope_of_work || []).map(item =>\n  `<div style=\"display:flex;gap:12px;padding:9px 0;border-bottom:1px solid #f3f4f6;align-items:flex-start\">\n    <span style=\"font-size:11px;font-weight:700;padding:2px 7px;border-radius:8px;white-space:nowrap;margin-top:2px;background:${item.priority === 'must_have' ? '#fef2f2' : '#f9fafb'};color:${item.priority === 'must_have' ? '#b91c1c' : '#9ca3af'}\">${item.priority === 'must_have' ? 'Must' : 'Nice'}</span>\n    <div>\n      <div style=\"font-size:14px;font-weight:600;color:#111\">${esc(item.item)}</div>\n      <div style=\"font-size:13px;color:#555;margin-top:2px\">${esc(item.details)}</div>\n    </div>\n  </div>`).join('');\n\nconst criteriaList = (b.success_criteria || []).map(c =>\n  `<div style=\"font-size:14px;padding:6px 0;border-bottom:1px solid #f0fdf4;color:#166534\">✓ ${esc(c)}</div>`).join('');\n\nconst questionList = (b.questions_to_answer_in_quote || []).map((q, i) =>\n  `<div style=\"font-size:14px;padding:6px 0;border-bottom:1px solid #f0f9ff;color:#1e40af\">${i+1}. ${esc(q)}</div>`).join('');\n\nconst warningList = (b.warnings_for_contractor || []).map(w =>\n  `<div style=\"font-size:13px;padding:5px 0;border-bottom:1px solid #fef9c3;color:#92400e\">⚠ ${esc(w)}</div>`).join('');\n\nconst outOfScopeList = (b.out_of_scope || []).map(o =>\n  `<div style=\"font-size:13px;color:#6b7280;padding:4px 0\">✗ ${esc(o)}</div>`).join('');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f5f5f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111\">\n<div style=\"max-width:680px;margin:0 auto\">\n\n  <div style=\"background:#292524;color:#fff;padding:20px 28px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#78716c;margin-bottom:5px\">Contractor Brief · ${esc(m.contractorTrade)}</div>\n    <div style=\"font-size:19px;font-weight:700\">${esc(b.brief_title)}</div>\n    <div style=\"font-size:13px;color:#78716c;margin-top:4px\">${esc(m.projectName)}${m.contractorName ? ' · For: ' + esc(m.contractorName) : ''}${m.budget ? ' · Budget: ' + esc(m.budget) : ''}</div>\n  </div>\n\n  <div style=\"background:#fff;padding:18px 28px;border:1px solid #e7e5e4;border-top:none\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9ca3af;margin-bottom:8px\">Project summary</div>\n    <p style=\"font-size:15px;line-height:1.75;color:#292524;margin:0\">${esc(b.project_summary)}</p>\n  </div>\n\n  <div style=\"background:#fff;padding:18px 28px;border:1px solid #e7e5e4;border-top:3px solid #f5f5f4\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9ca3af;margin-bottom:10px\">Scope of work</div>\n    ${scopeRows}\n    ${outOfScopeList ? `<div style=\"margin-top:12px\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#d1d5db;margin-bottom:6px\">Out of scope</div>${outOfScopeList}</div>` : ''}\n  </div>\n\n  <div style=\"background:#fff;padding:18px 28px;border:1px solid #e7e5e4;border-top:3px solid #f5f5f4\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9ca3af;margin-bottom:8px\">Site conditions & access</div>\n    <p style=\"font-size:14px;line-height:1.65;color:#374151;margin:0 0 12px\">${esc(b.site_conditions)}</p>\n    <p style=\"font-size:14px;line-height:1.65;color:#374151;margin:0\">${esc(b.access_and_logistics)}</p>\n  </div>\n\n  <div style=\"background:#fff;padding:18px 28px;border:1px solid #e7e5e4;border-top:3px solid #f5f5f4\">\n    <div style=\"display:grid;grid-template-columns:1fr 1fr;gap:20px\">\n      <div>\n        <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9ca3af;margin-bottom:8px\">Materials — homeowner supplies</div>\n        ${(b.materials?.supplied_by_homeowner||[]).map(m => `<div style=\"font-size:13px;padding:4px 0;color:#374151\">• ${esc(m)}</div>`).join('') || '<div style=\"font-size:13px;color:#9ca3af\">None</div>'}\n      </div>\n      <div>\n        <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9ca3af;margin-bottom:8px\">Materials — contractor sources</div>\n        ${(b.materials?.supplied_by_contractor||[]).map(m => `<div style=\"font-size:13px;padding:4px 0;color:#374151\">• ${esc(m)}</div>`).join('') || '<div style=\"font-size:13px;color:#9ca3af\">None</div>'}\n      </div>\n    </div>\n    ${b.materials?.specifications ? `<div style=\"margin-top:12px;font-size:13px;color:#555;background:#f9fafb;padding:10px 14px;border-radius:6px\">${esc(b.materials.specifications)}</div>` : ''}\n  </div>\n\n  <div style=\"background:#f0fdf4;padding:16px 28px;border:1px solid #bbf7d0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#15803d;margin-bottom:8px\">How we'll know it's done right</div>\n    ${criteriaList}\n  </div>\n\n  <div style=\"background:#eff6ff;padding:16px 28px;border:1px solid #bfdbfe\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#1d4ed8;margin-bottom:8px\">Please address in your quote</div>\n    ${questionList}\n  </div>\n\n  ${warningList ? `<div style=\"background:#fefce8;padding:14px 28px;border:1px solid #fef08a\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#a16207;margin-bottom:8px\">Things to know before you start</div>\n    ${warningList}\n  </div>` : ''}\n\n  <div style=\"background:#fff;padding:14px 28px;border:1px solid #e7e5e4;border-top:3px solid #f5f5f4\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9ca3af;margin-bottom:6px\">Timeline & communication</div>\n    <p style=\"font-size:14px;color:#374151;margin:0 0 6px\">${esc(b.timeline_expectations)}</p>\n    <p style=\"font-size:14px;color:#374151;margin:0\">${esc(b.communication_preferences)}</p>\n  </div>\n\n  <div style=\"background:#292524;color:#57534e;font-size:11px;padding:12px 28px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Home Renovation Tracker · Contractor Brief · ${new Date().toLocaleDateString()}\n  </div>\n</div>\n</body></html>`;\n\nreturn [{ json: { html, replyEmail: m.replyEmail, briefTitle: b.brief_title, trade: m.contractorTrade } }];"
+      },
+      "id": "t8w2z5c7-0014",
+      "name": "Build Brief Doc",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 520]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-be",
+              "leftValue": "={{ $json.replyEmail }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "t8w2z5c7-0015",
+      "name": "Brief Has Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1520, 520]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.replyEmail}}",
+        "subject": "Contractor Brief: {{ $json.briefTitle }} ({{ $json.trade }})",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "t8w2z5c7-0016",
+      "name": "Email Brief",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1740, 460],
+      "credentials": {
+        "smtp": { "id": "smtp-creds-01", "name": "SMTP Account" }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'generated', brief_title: $json.briefTitle, trade: $json.trade, emailed: $json.replyEmail ? true : false } }}"
+      },
+      "id": "t8w2z5c7-0017",
+      "name": "Return Brief",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1960, 520]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $('Validate Event').first().json.error || $('Validate Brief Request').first().json.error, status: 400 } }}"
+      },
+      "id": "t8w2z5c7-0018",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [860, 620]
+    }
+  ],
+  "connections": {
+    "Webhook – Log Project Event": {
+      "main": [[{ "node": "Validate Event", "type": "main", "index": 0 }]]
+    },
+    "Validate Event": {
+      "main": [[{ "node": "Event Valid?", "type": "main", "index": 0 }]]
+    },
+    "Event Valid?": {
+      "main": [
+        [{ "node": "Save Event", "type": "main", "index": 0 }],
+        [{ "node": "Return Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Save Event": {
+      "main": [[{ "node": "Load Project Events", "type": "main", "index": 0 }]]
+    },
+    "Load Project Events": {
+      "main": [[{ "node": "Compute Project State", "type": "main", "index": 0 }]]
+    },
+    "Compute Project State": {
+      "main": [[{ "node": "Build Event Confirmation", "type": "main", "index": 0 }]]
+    },
+    "Build Event Confirmation": {
+      "main": [[{ "node": "Return Event Confirmation", "type": "main", "index": 0 }]]
+    },
+    "Webhook – Generate Brief": {
+      "main": [[{ "node": "Validate Brief Request", "type": "main", "index": 0 }]]
+    },
+    "Validate Brief Request": {
+      "main": [[{ "node": "Brief Valid?", "type": "main", "index": 0 }]]
+    },
+    "Brief Valid?": {
+      "main": [
+        [{ "node": "Claude Brief Writer", "type": "main", "index": 0 }],
+        [{ "node": "Return Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Claude Brief Writer": {
+      "main": [[{ "node": "Parse Brief", "type": "main", "index": 0 }]]
+    },
+    "Parse Brief": {
+      "main": [[{ "node": "Build Brief Doc", "type": "main", "index": 0 }]]
+    },
+    "Build Brief Doc": {
+      "main": [[{ "node": "Brief Has Email?", "type": "main", "index": 0 }]]
+    },
+    "Brief Has Email?": {
+      "main": [
+        [{ "node": "Email Brief", "type": "main", "index": 0 }],
+        [{ "node": "Return Brief", "type": "main", "index": 0 }]
+      ]
+    },
+    "Email Brief": {
+      "main": [[{ "node": "Return Brief", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": ["home", "renovation", "contractors", "project-management"],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-04T10:00:00.000Z",
+  "versionId": "v1.0.0"
+}

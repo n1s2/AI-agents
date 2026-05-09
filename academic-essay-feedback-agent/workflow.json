@@ -1,0 +1,193 @@
+{
+  "name": "Academic Essay Feedback Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "essay-feedback",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "u9x3a6d8-0001",
+      "name": "Webhook – Submit Essay",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\n\nconst required = ['essay_text', 'essay_title'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) {\n  return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\n}\n\nif (body.essay_text.trim().length < 200) {\n  return [{ json: { valid: false, error: 'Essay text too short — minimum 200 characters' } }];\n}\n\nconst validLevels = ['high_school', 'undergraduate', 'graduate', 'phd', 'professional'];\nconst academicLevel = validLevels.includes(body.academic_level) ? body.academic_level : 'undergraduate';\n\nconst validTypes = ['argumentative', 'analytical', 'expository', 'comparative', 'research', 'reflective', 'literature_review', 'case_study', 'other'];\nconst essayType = validTypes.includes(body.essay_type) ? body.essay_type : 'other';\n\nreturn [{\n  json: {\n    valid: true,\n    essayTitle: body.essay_title.trim(),\n    essayText: body.essay_text.trim().slice(0, 10000),\n    essayType,\n    academicLevel,\n    subject: body.subject || '',\n    assignmentPrompt: (body.assignment_prompt || '').slice(0, 600),\n    wordCount: body.essay_text.trim().split(/\\s+/).length,\n    targetWordCount: parseInt(body.target_word_count) || null,\n    specificConcerns: (body.specific_concerns || '').slice(0, 400),\n    citationStyle: body.citation_style || '',\n    replyEmail: body.reply_email || null,\n    requestedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "u9x3a6d8-0002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 320]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-v",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "u9x3a6d8-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [640, 320]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "u9x3a6d8-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [860, 480]
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-5",
+        "options": { "temperature": 0.35, "maxTokens": 3500 },
+        "messages": {
+          "values": [
+            {
+              "content": "You are a rigorous academic writing tutor who gives substantive, specific feedback on essays. You don't just say 'good argument' or 'needs more evidence' — you point to specific sentences and passages, explain exactly what's weak and why, and show what a stronger version would look like.\n\nYou calibrate your feedback to the academic level. High school feedback emphasizes structure and clarity. Graduate feedback digs into argument sophistication, use of evidence, and engagement with existing scholarship.\n\nYou are honest. A weak thesis gets called out as weak. You also recognize what's genuinely working and say so specifically.\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Give detailed feedback on this essay.\n\nTitle: {{ $json.essayTitle }}\nType: {{ $json.essayType }}\nLevel: {{ $json.academicLevel }}\nSubject: {{ $json.subject || 'not specified' }}\nWord count: {{ $json.wordCount }}{{ $json.targetWordCount ? ' / target: ' + $json.targetWordCount : '' }}\nCitation style: {{ $json.citationStyle || 'not specified' }}\nSpecific concerns: {{ $json.specificConcerns || 'none' }}\n\nAssignment prompt (if provided):\n{{ $json.assignmentPrompt || 'not provided' }}\n\nEssay:\n{{ $json.essayText }}\n\nReturn this JSON:\n{\n  \"overall_score\": 72,\n  \"grade_equivalent\": \"B- / Second Class Lower\",\n  \"one_line_verdict\": \"honest one-sentence read on where this essay stands\",\n  \"strengths\": [\n    {\n      \"what\": \"specific strength\",\n      \"example\": \"quote or reference the specific passage that demonstrates this\"\n    }\n  ],\n  \"thesis_feedback\": {\n    \"current_thesis\": \"quote the thesis statement if identifiable, or describe where it sits\",\n    \"assessment\": \"is it arguable, specific, appropriately scoped?\",\n    \"suggested_revision\": \"a stronger version of the thesis — write it out fully\"\n  },\n  \"argument_structure\": {\n    \"assessment\": \"how well does the argument flow? are paragraphs doing distinct work?\",\n    \"weakest_section\": \"which part of the argument is least convincing and why\",\n    \"structural_suggestion\": \"one specific structural change that would strengthen the essay\"\n  },\n  \"evidence_and_analysis\": {\n    \"assessment\": \"how well is evidence used and analyzed?\",\n    \"problem_passages\": [\n      {\n        \"passage\": \"quote or describe the problematic passage\",\n        \"issue\": \"what's wrong with how evidence is used here\",\n        \"fix\": \"how to improve this specific passage\"\n      }\n    ]\n  },\n  \"writing_quality\": {\n    \"clarity_score\": 7,\n    \"observations\": \"specific observations about sentence-level writing\",\n    \"problematic_sentences\": [\n      {\n        \"original\": \"a sentence from the essay that doesn't work well\",\n        \"problem\": \"why it doesn't work\",\n        \"revision\": \"a cleaner version\"\n      }\n    ]\n  },\n  \"citation_and_referencing\": \"feedback on citation usage if evident — null if no citations present and none expected\",\n  \"word_count_note\": {{ $json.targetWordCount ? '\"assessment of whether the current word count is appropriate for the task\"' : 'null' }},\n  \"priority_improvements\": [\n    {\n      \"priority\": 1,\n      \"action\": \"the single most important thing to fix\",\n      \"impact\": \"what grade-level improvement this would have\"\n    }\n  ],\n  \"what_a_top_grade_version_looks_like\": \"2-3 sentences describing specifically what would need to be different for this essay to score in the top band — concrete, not generic\"\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "u9x3a6d8-0005",
+      "name": "Claude Essay Tutor",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [860, 260]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet feedback;\ntry {\n  feedback = JSON.parse(raw.replace(/```json|```/g, '').trim());\n} catch(e) {\n  return [{ json: { error: 'Parse error', raw } }];\n}\nconst input = $('Validate Input').first().json;\nfeedback._meta = {\n  essayTitle: input.essayTitle,\n  academicLevel: input.academicLevel,\n  essayType: input.essayType,\n  wordCount: input.wordCount,\n  replyEmail: input.replyEmail\n};\nreturn [{ json: feedback }];"
+      },
+      "id": "u9x3a6d8-0006",
+      "name": "Parse Feedback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 260]
+    },
+    {
+      "parameters": {
+        "jsCode": "const f = $input.first().json;\nconst m = f._meta;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst score = f.overall_score || 0;\nconst scoreColor = score >= 70 ? '#16a34a' : score >= 50 ? '#d97706' : '#dc2626';\nconst scoreBar = Array.from({length: 10}, (_, i) =>\n  `<span style=\"display:inline-block;width:22px;height:10px;border-radius:2px;background:${i < Math.round(score/10) ? scoreColor : '#e5e7eb'};margin-right:2px\"></span>`\n).join('');\n\nconst strengthCards = (f.strengths || []).map(s =>\n  `<div style=\"border-left:3px solid #16a34a;padding:10px 14px;background:#f0fdf4;border-radius:0 6px 6px 0;margin-bottom:10px\">\n    <div style=\"font-size:14px;font-weight:600;color:#166534\">${esc(s.what)}</div>\n    ${s.example ? `<div style=\"font-size:13px;color:#4b5563;margin-top:5px;font-style:italic\">"${esc(s.example)}"</div>` : ''}\n  </div>`).join('');\n\nconst problemPassages = (f.evidence_and_analysis?.problem_passages || []).map(p =>\n  `<div style=\"border:1px solid #fecaca;border-radius:6px;margin-bottom:10px;overflow:hidden\">\n    <div style=\"background:#fef2f2;padding:8px 14px;font-size:13px;font-style:italic;color:#7f1d1d\">"${esc(p.passage)}"</div>\n    <div style=\"padding:10px 14px\">\n      <div style=\"font-size:13px;color:#dc2626;margin-bottom:4px\"><strong>Issue:</strong> ${esc(p.issue)}</div>\n      <div style=\"font-size:13px;color:#16a34a\"><strong>Fix:</strong> ${esc(p.fix)}</div>\n    </div>\n  </div>`).join('');\n\nconst sentenceRevisions = (f.writing_quality?.problematic_sentences || []).map(s =>\n  `<div style=\"margin-bottom:12px\">\n    <div style=\"font-size:13px;text-decoration:line-through;color:#9ca3af;margin-bottom:4px\">${esc(s.original)}</div>\n    <div style=\"font-size:13px;color:#374151;margin-bottom:3px\">${esc(s.problem)}</div>\n    <div style=\"font-size:13px;color:#166534;font-weight:500\">→ ${esc(s.revision)}</div>\n  </div>`).join('');\n\nconst priorityCards = (f.priority_improvements || []).map(p =>\n  `<div style=\"background:#f8faff;border-left:3px solid #2563eb;padding:12px 16px;border-radius:0 6px 6px 0;margin-bottom:10px\">\n    <div style=\"font-size:12px;font-weight:700;color:#1d4ed8;margin-bottom:4px\">Priority ${p.priority}</div>\n    <div style=\"font-size:14px;font-weight:600;color:#1e293b\">${esc(p.action)}</div>\n    <div style=\"font-size:13px;color:#64748b;margin-top:3px\">${esc(p.impact)}</div>\n  </div>`).join('');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f8f9fa;font-family:Georgia,'Times New Roman',serif;color:#1a1a1a\">\n<div style=\"max-width:700px;margin:0 auto\">\n\n  <div style=\"background:#1e293b;color:#fff;padding:20px 28px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#64748b;margin-bottom:5px\">${esc(m.essayType.replace(/_/g,' '))} · ${esc(m.academicLevel.replace(/_/g,' '))} · ${m.wordCount} words</div>\n    <div style=\"font-size:19px;font-weight:700\">${esc(m.essayTitle)}</div>\n    <div style=\"font-size:13px;color:#94a3b8;margin-top:4px\">${esc(f.one_line_verdict)}</div>\n  </div>\n\n  <div style=\"background:#fff;padding:18px 28px;border:1px solid #e2e8f0;border-top:none;display:flex;align-items:center;gap:20px\">\n    <div style=\"text-align:center;min-width:70px\">\n      <div style=\"font-size:36px;font-weight:800;color:${scoreColor}\">${score}</div>\n      <div style=\"font-size:11px;color:#9ca3af;text-transform:uppercase\">/100</div>\n    </div>\n    <div>\n      <div style=\"font-size:14px;font-weight:600;color:#374151;margin-bottom:5px\">${esc(f.grade_equivalent)}</div>\n      <div>${scoreBar}</div>\n    </div>\n  </div>\n\n  <div style=\"background:#fff;padding:18px 28px;border:1px solid #e2e8f0;border-top:3px solid #f1f5f9\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9ca3af;margin-bottom:10px\">What's working</div>\n    ${strengthCards || '<div style=\"font-size:14px;color:#9ca3af\">No significant strengths identified</div>'}\n  </div>\n\n  <div style=\"background:#fff;padding:18px 28px;border:1px solid #e2e8f0;border-top:3px solid #f1f5f9\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9ca3af;margin-bottom:10px\">Thesis</div>\n    ${f.thesis_feedback?.current_thesis ? `<div style=\"font-size:14px;font-style:italic;color:#374151;background:#f9fafb;padding:10px 14px;border-radius:6px;margin-bottom:10px\">"${esc(f.thesis_feedback.current_thesis)}"</div>` : ''}\n    <div style=\"font-size:14px;color:#374151;line-height:1.65;margin-bottom:10px\">${esc(f.thesis_feedback?.assessment)}</div>\n    ${f.thesis_feedback?.suggested_revision ? `<div style=\"background:#f0fdf4;border-left:3px solid #16a34a;padding:10px 14px;border-radius:0 6px 6px 0;font-size:14px;color:#166534\"><strong>Stronger version:</strong> ${esc(f.thesis_feedback.suggested_revision)}</div>` : ''}\n  </div>\n\n  <div style=\"background:#fff;padding:18px 28px;border:1px solid #e2e8f0;border-top:3px solid #f1f5f9\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9ca3af;margin-bottom:8px\">Argument structure</div>\n    <div style=\"font-size:14px;color:#374151;line-height:1.65;margin-bottom:10px\">${esc(f.argument_structure?.assessment)}</div>\n    ${f.argument_structure?.weakest_section ? `<div style=\"background:#fef2f2;border-left:3px solid #dc2626;padding:10px 14px;border-radius:0 6px 6px 0;font-size:13px;margin-bottom:8px\"><strong>Weakest section:</strong> ${esc(f.argument_structure.weakest_section)}</div>` : ''}\n    ${f.argument_structure?.structural_suggestion ? `<div style=\"font-size:13px;color:#2563eb;background:#eff6ff;padding:10px 14px;border-radius:6px\"><strong>Suggestion:</strong> ${esc(f.argument_structure.structural_suggestion)}</div>` : ''}\n  </div>\n\n  ${problemPassages ? `<div style=\"background:#fff;padding:18px 28px;border:1px solid #e2e8f0;border-top:3px solid #f1f5f9\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9ca3af;margin-bottom:10px\">Evidence & analysis — problem passages</div>\n    ${problemPassages}\n  </div>` : ''}\n\n  ${sentenceRevisions ? `<div style=\"background:#fff;padding:18px 28px;border:1px solid #e2e8f0;border-top:3px solid #f1f5f9\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9ca3af;margin-bottom:10px\">Writing — sentence revisions</div>\n    ${sentenceRevisions}\n  </div>` : ''}\n\n  <div style=\"background:#fff;padding:18px 28px;border:1px solid #e2e8f0;border-top:3px solid #f1f5f9\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9ca3af;margin-bottom:10px\">Priority improvements</div>\n    ${priorityCards}\n  </div>\n\n  <div style=\"background:#f0f9ff;padding:16px 28px;border:1px solid #bae6fd\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#0369a1;margin-bottom:8px\">What a top-band version looks like</div>\n    <p style=\"font-size:14px;line-height:1.7;color:#1e40af;margin:0\">${esc(f.what_a_top_grade_version_looks_like)}</p>\n  </div>\n\n  <div style=\"background:#1e293b;color:#475569;font-size:11px;padding:12px 28px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Academic Essay Feedback · ${esc(m.academicLevel.replace(/_/g,' '))} level · ${new Date().toLocaleDateString()}\n  </div>\n</div>\n</body></html>`;\n\nreturn [{ json: { html, replyEmail: m.replyEmail, essayTitle: m.essayTitle, score: f.overall_score, grade: f.grade_equivalent, feedback: f } }];"
+      },
+      "id": "u9x3a6d8-0007",
+      "name": "Build Feedback Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 260]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-email",
+              "leftValue": "={{ $json.replyEmail }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "u9x3a6d8-0008",
+      "name": "Has Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1520, 260]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.replyEmail}}",
+        "subject": "Essay feedback: \"{{ $json.essayTitle }}\" — {{ $json.score }}/100 · {{ $json.grade }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "u9x3a6d8-0009",
+      "name": "Email Feedback",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1740, 200],
+      "credentials": {
+        "smtp": { "id": "smtp-creds-01", "name": "SMTP Account" }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'reviewed', score: $json.score, grade: $json.grade, emailed: $json.replyEmail ? true : false, feedback: $json.feedback } }}"
+      },
+      "id": "u9x3a6d8-0010",
+      "name": "Return Feedback",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1960, 260]
+    }
+  ],
+  "connections": {
+    "Webhook – Submit Essay": {
+      "main": [[{ "node": "Validate Input", "type": "main", "index": 0 }]]
+    },
+    "Validate Input": {
+      "main": [[{ "node": "Valid?", "type": "main", "index": 0 }]]
+    },
+    "Valid?": {
+      "main": [
+        [{ "node": "Claude Essay Tutor", "type": "main", "index": 0 }],
+        [{ "node": "Return Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Claude Essay Tutor": {
+      "main": [[{ "node": "Parse Feedback", "type": "main", "index": 0 }]]
+    },
+    "Parse Feedback": {
+      "main": [[{ "node": "Build Feedback Report", "type": "main", "index": 0 }]]
+    },
+    "Build Feedback Report": {
+      "main": [[{ "node": "Has Email?", "type": "main", "index": 0 }]]
+    },
+    "Has Email?": {
+      "main": [
+        [{ "node": "Email Feedback", "type": "main", "index": 0 }],
+        [{ "node": "Return Feedback", "type": "main", "index": 0 }]
+      ]
+    },
+    "Email Feedback": {
+      "main": [[{ "node": "Return Feedback", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": ["education", "writing", "feedback", "academic"],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-04T11:00:00.000Z",
+  "versionId": "v1.0.0"
+}
