@@ -1,0 +1,289 @@
+{
+  "name": "Bug Triage & Prioritization Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "triage-bug",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "x4a7d1g3-0001",
+      "name": "Webhook – Submit Bug",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "days", "daysInterval": 1, "triggerAtHour": 9, "triggerAtMinute": 0 }]
+        }
+      },
+      "id": "x4a7d1g3-0002",
+      "name": "Daily Digest 9am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [200, 520]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['title', 'description', 'reporter'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) {\n  return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\n}\nif (body.description.trim().length < 20) {\n  return [{ json: { valid: false, error: 'description too short — explain what happened' } }];\n}\nconst severities = ['critical', 'high', 'medium', 'low'];\nconst reportedSeverity = severities.includes(body.reported_severity) ? body.reported_severity : null;\nreturn [{\n  json: {\n    valid: true,\n    bugId: `BUG-${Date.now()}`,\n    title: body.title.trim(),\n    description: body.description.trim().slice(0, 2000),\n    stepsToReproduce: (body.steps_to_reproduce || '').slice(0, 1000),\n    expectedBehavior: body.expected_behavior || '',\n    actualBehavior: body.actual_behavior || '',\n    reporter: body.reporter.trim(),\n    reporterEmail: body.reporter_email || null,\n    affectedComponent: body.affected_component || '',\n    affectedUsers: body.affected_users || '',\n    environment: body.environment || 'production',\n    reportedSeverity,\n    browserOrPlatform: body.browser_or_platform || '',\n    errorMessage: (body.error_message || '').slice(0, 500),\n    notifySlack: body.notify_slack_channel || null,\n    reportedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "x4a7d1g3-0003",
+      "name": "Validate Bug Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [{ "id": "cv", "leftValue": "={{ $json.valid }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "x4a7d1g3-0004",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "x4a7d1g3-0005",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [860, 460]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": { "temperature": 0.2, "maxTokens": 1200 },
+        "messages": {
+          "values": [
+            {
+              "content": "You are an experienced engineering lead who triages bug reports. You assess severity based on actual impact — not what the reporter thinks it is. A bug affecting 0.1% of users with a workaround is not critical no matter what the reporter says.\n\nYou identify what's actually wrong, what type of issue it is, who should own it, and what the first debugging step should be. You're specific and practical.\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Triage this bug report.\n\nID: {{ $json.bugId }}\nTitle: {{ $json.title }}\nReporter: {{ $json.reporter }}\nEnvironment: {{ $json.environment }}\nAffected component: {{ $json.affectedComponent || 'not specified' }}\nAffected users: {{ $json.affectedUsers || 'unknown' }}\nReporter-assigned severity: {{ $json.reportedSeverity || 'not specified' }}\nBrowser/platform: {{ $json.browserOrPlatform || 'not specified' }}\n\nDescription:\n{{ $json.description }}\n\nSteps to reproduce:\n{{ $json.stepsToReproduce || 'not provided' }}\n\nExpected behavior: {{ $json.expectedBehavior || 'not specified' }}\nActual behavior: {{ $json.actualBehavior || 'not specified' }}\nError message: {{ $json.errorMessage || 'none' }}\n\nReturn this JSON:\n{\n  \"severity\": \"one of: critical | high | medium | low\",\n  \"severity_rationale\": \"one sentence — why this severity, referencing the actual impact\",\n  \"severity_matches_reporter\": true or false,\n  \"severity_mismatch_note\": \"if severity_matches_reporter is false: explain the discrepancy — null otherwise\",\n  \"bug_type\": \"one of: regression | data_corruption | ui_display | performance | security | integration | logic_error | configuration | intermittent | unclear\",\n  \"reproducibility\": \"one of: always | sometimes | rarely | cannot_reproduce | unknown\",\n  \"affected_scope\": \"brief assessment of how many users / workflows this realistically affects\",\n  \"probable_cause\": \"your best hypothesis about what's causing this based on the description — be specific, not vague\",\n  \"suggested_owner\": \"which team or role should own this: frontend | backend | devops | qa | design | data | security | unclear\",\n  \"first_debug_step\": \"the single most useful first thing the assigned engineer should do to investigate — specific action\",\n  \"workaround_exists\": true or false,\n  \"workaround_description\": \"if workaround_exists is true: what it is — null otherwise\",\n  \"needs_clarification\": true or false,\n  \"clarification_questions\": [\"if needs_clarification: specific questions to ask the reporter — empty array otherwise\"],\n  \"summary_for_ticket\": \"a clean 2-3 sentence summary suitable for a Jira/Linear ticket description — precise and technical\"\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "x4a7d1g3-0006",
+      "name": "Claude Triage Engine",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [860, 220]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet triage;\ntry {\n  triage = JSON.parse(raw.replace(/```json|```/g, '').trim());\n} catch(e) {\n  return [{ json: { error: 'Parse error', raw } }];\n}\nconst bug = $('Validate Bug Report').first().json;\ntriage._bug = bug;\nreturn [{ json: triage }];"
+      },
+      "id": "x4a7d1g3-0007",
+      "name": "Parse Triage",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 220]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.BUGS_SHEET_ID}}",
+        "sheetName": "Bugs",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "bug_id": "={{ $json._bug.bugId }}",
+            "reported_at": "={{ $json._bug.reportedAt }}",
+            "title": "={{ $json._bug.title }}",
+            "reporter": "={{ $json._bug.reporter }}",
+            "environment": "={{ $json._bug.environment }}",
+            "severity": "={{ $json.severity }}",
+            "bug_type": "={{ $json.bug_type }}",
+            "reproducibility": "={{ $json.reproducibility }}",
+            "suggested_owner": "={{ $json.suggested_owner }}",
+            "workaround_exists": "={{ $json.workaround_exists }}",
+            "needs_clarification": "={{ $json.needs_clarification }}",
+            "status": "triaged",
+            "description": "={{ $json._bug.description }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "x4a7d1g3-0008",
+      "name": "Save to Bug Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [1300, 220],
+      "credentials": { "googleSheetsOAuth2Api": { "id": "google-creds-01", "name": "Google Sheets" } }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [{ "id": "crit", "leftValue": "={{ $json.severity }}", "rightValue": "critical", "operator": { "type": "string", "operation": "equals" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "x4a7d1g3-0009",
+      "name": "Critical?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1520, 160]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$env.ENG_LEAD_EMAIL}}",
+        "subject": "🚨 CRITICAL BUG – {{ $json._bug.bugId }}: {{ $json._bug.title }}",
+        "emailType": "html",
+        "message": "<div style='font-family:monospace;max-width:600px'><div style='background:#dc2626;color:#fff;padding:14px 18px'><strong>CRITICAL BUG — {{ $json._bug.bugId }}</strong></div><div style='background:#fef2f2;padding:16px 18px;border:1px solid #fecaca'><p><strong>{{ $json._bug.title }}</strong></p><p>{{ $json._bug.description }}</p><hr><p><strong>Probable cause:</strong> {{ $json.probable_cause }}</p><p><strong>First debug step:</strong> {{ $json.first_debug_step }}</p><p><strong>Suggested owner:</strong> {{ $json.suggested_owner }}</p><p><strong>Workaround:</strong> {{ $json.workaround_exists ? $json.workaround_description : 'None' }}</p><p><strong>Reported by:</strong> {{ $json._bug.reporter }} · {{ $json._bug.environment }}</p></div></div>"
+      },
+      "id": "x4a7d1g3-0010",
+      "name": "Alert Eng Lead",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1740, 100],
+      "credentials": { "smtp": { "id": "smtp-creds-01", "name": "SMTP Account" } }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [{ "id": "cslack", "leftValue": "={{ $json._bug.notifySlack || '' }}", "rightValue": "", "operator": { "type": "string", "operation": "notEmpty" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "x4a7d1g3-0011",
+      "name": "Slack?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1520, 340]
+    },
+    {
+      "parameters": {
+        "channel": "={{ $('Parse Triage').first().json._bug.notifySlack }}",
+        "text": "🐛 *New bug triaged — {{ $('Parse Triage').first().json._bug.bugId }}*\n*{{ $('Parse Triage').first().json._bug.title }}*\nSeverity: *{{ $('Parse Triage').first().json.severity.toUpperCase() }}* · Type: {{ $('Parse Triage').first().json.bug_type }} · Owner: {{ $('Parse Triage').first().json.suggested_owner }}\n{{ $('Parse Triage').first().json.severity_rationale }}\n_First step: {{ $('Parse Triage').first().json.first_debug_step }}_",
+        "otherOptions": {}
+      },
+      "id": "x4a7d1g3-0012",
+      "name": "Slack Bug Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1740, 340],
+      "credentials": { "slackApi": { "id": "slack-creds-01", "name": "Slack Account" } }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'triaged', bug_id: $json._bug.bugId, severity: $json.severity, bug_type: $json.bug_type, suggested_owner: $json.suggested_owner, first_debug_step: $json.first_debug_step, workaround_exists: $json.workaround_exists, needs_clarification: $json.needs_clarification, clarification_questions: $json.clarification_questions, summary: $json.summary_for_ticket } }}"
+      },
+      "id": "x4a7d1g3-0013",
+      "name": "Return Triage",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1960, 240]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.BUGS_SHEET_ID}}",
+        "sheetName": "Bugs",
+        "options": {}
+      },
+      "id": "x4a7d1g3-0014",
+      "name": "Load All Bugs",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [420, 520],
+      "credentials": { "googleSheetsOAuth2Api": { "id": "google-creds-01", "name": "Google Sheets" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const bugs = $input.all().map(r => r.json).filter(b => b.bug_id && b.status !== 'closed');\nconst bySeverity = { critical: [], high: [], medium: [], low: [] };\nfor (const b of bugs) {\n  const sev = b.severity || 'low';\n  if (bySeverity[sev]) bySeverity[sev].push(b);\n}\nconst now = new Date();\nconst stale = bugs.filter(b => {\n  const age = Math.floor((now - new Date(b.reported_at)) / 86400000);\n  return age >= 3 && b.severity === 'critical' || age >= 7 && b.severity === 'high' || age >= 14 && b.severity === 'medium';\n});\nreturn [{ json: { bugs, bySeverity, stale, totalOpen: bugs.length, reportDate: now.toISOString().split('T')[0] } }];"
+      },
+      "id": "x4a7d1g3-0015",
+      "name": "Analyse Bug Queue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 520]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": { "temperature": 0.45, "maxTokens": 700 },
+        "messages": {
+          "values": [
+            {
+              "content": "You write brief, direct daily bug queue summaries for engineering teams. You highlight what needs action today, flag anything that's been sitting too long, and give an honest read of the queue's health. Under 180 words.",
+              "role": "system"
+            },
+            {
+              "content": "Write today's bug queue summary.\n\nDate: {{ $json.reportDate }}\nTotal open: {{ $json.totalOpen }}\n\nBy severity:\n- Critical: {{ $json.bySeverity.critical.length }} ({{ $json.bySeverity.critical.map(b => b.title).join(', ') || 'none' }})\n- High: {{ $json.bySeverity.high.length }}\n- Medium: {{ $json.bySeverity.medium.length }}\n- Low: {{ $json.bySeverity.low.length }}\n\nStale bugs (overdue by severity SLA):\n{{ $json.stale.map(b => `- ${b.bug_id}: ${b.title} (${b.severity}, reported ${b.reported_at})`).join('\\n') || 'none' }}\n\nGive: overall queue health, what needs action today, any stale bugs the team should address.",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "x4a7d1g3-0016",
+      "name": "Claude Queue Analyst",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [860, 520]
+    },
+    {
+      "parameters": {
+        "jsCode": "const note = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nconst d = $('Analyse Bug Queue').first().json;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nconst sevColor = { critical: '#dc2626', high: '#d97706', medium: '#2563eb', low: '#6b7280' };\nconst bugRows = d.bugs.slice(0, 20).map(b => `<tr style=\"border-bottom:1px solid #f3f4f6\"><td style=\"padding:8px 12px;font-family:monospace;font-size:12px\">${esc(b.bug_id)}</td><td style=\"padding:8px 12px;font-size:13px\">${esc(b.title)}</td><td style=\"padding:8px 12px\"><span style=\"background:${sevColor[b.severity]||'#6b7280'}22;color:${sevColor[b.severity]||'#6b7280'};font-size:11px;font-weight:700;padding:2px 7px;border-radius:8px\">${esc(b.severity||'?')}</span></td><td style=\"padding:8px 12px;font-size:13px;color:#6b7280\">${esc(b.bug_type||'')}</td><td style=\"padding:8px 12px;font-size:13px;color:#6b7280\">${esc(b.suggested_owner||'')}</td></tr>`).join('');\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body style=\"margin:0;padding:16px;background:#f9fafb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111\">\n<div style=\"max-width:660px;margin:0 auto\">\n  <div style=\"background:#111827;color:#fff;padding:18px 26px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#6b7280;margin-bottom:4px\">Daily Bug Digest · ${esc(d.reportDate)}</div>\n    <div style=\"font-size:18px;font-weight:700\">${d.totalOpen} open bugs · ${d.bySeverity.critical.length} critical · ${d.stale.length} stale</div>\n  </div>\n  <div style=\"background:#fff;padding:16px 26px;border:1px solid #e5e7eb;border-top:none\">\n    <p style=\"font-size:14px;line-height:1.7;color:#374151;margin:0\">${esc(note).replace(/\\n/g,'<br>')}</p>\n  </div>\n  <div style=\"background:#fff;padding:16px 26px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <table style=\"width:100%;border-collapse:collapse\"><thead><tr style=\"font-size:11px;text-transform:uppercase;color:#9ca3af\"><th style=\"padding:6px 12px;text-align:left\">ID</th><th style=\"padding:6px 12px;text-align:left\">Title</th><th style=\"padding:6px 12px;text-align:left\">Severity</th><th style=\"padding:6px 12px;text-align:left\">Type</th><th style=\"padding:6px 12px;text-align:left\">Owner</th></tr></thead><tbody>${bugRows}</tbody></table>\n  </div>\n  <div style=\"background:#111827;color:#4b5563;font-size:11px;padding:10px 26px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">Bug Triage Agent · ${esc(d.reportDate)}</div>\n</div></body></html>`;\nreturn [{ json: { html, totalOpen: d.totalOpen, criticalCount: d.bySeverity.critical.length } }];"
+      },
+      "id": "x4a7d1g3-0017",
+      "name": "Build Digest Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 520]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$env.ENG_LEAD_EMAIL}}",
+        "subject": "Bug digest — {{ $json.totalOpen }} open{{ $json.criticalCount > 0 ? ', ' + $json.criticalCount + ' critical' : '' }} · {{ new Date().toISOString().split('T')[0] }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "x4a7d1g3-0018",
+      "name": "Send Digest",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1300, 520],
+      "credentials": { "smtp": { "id": "smtp-creds-01", "name": "SMTP Account" } }
+    }
+  ],
+  "connections": {
+    "Webhook – Submit Bug": { "main": [[{ "node": "Validate Bug Report", "type": "main", "index": 0 }]] },
+    "Validate Bug Report": { "main": [[{ "node": "Valid?", "type": "main", "index": 0 }]] },
+    "Valid?": { "main": [[{ "node": "Claude Triage Engine", "type": "main", "index": 0 }], [{ "node": "Return Error", "type": "main", "index": 0 }]] },
+    "Claude Triage Engine": { "main": [[{ "node": "Parse Triage", "type": "main", "index": 0 }]] },
+    "Parse Triage": { "main": [[{ "node": "Save to Bug Sheet", "type": "main", "index": 0 }]] },
+    "Save to Bug Sheet": { "main": [[{ "node": "Critical?", "type": "main", "index": 0 }, { "node": "Slack?", "type": "main", "index": 0 }]] },
+    "Critical?": { "main": [[{ "node": "Alert Eng Lead", "type": "main", "index": 0 }], [{ "node": "Return Triage", "type": "main", "index": 0 }]] },
+    "Alert Eng Lead": { "main": [[{ "node": "Return Triage", "type": "main", "index": 0 }]] },
+    "Slack?": { "main": [[{ "node": "Slack Bug Alert", "type": "main", "index": 0 }], []] },
+    "Daily Digest 9am": { "main": [[{ "node": "Load All Bugs", "type": "main", "index": 0 }]] },
+    "Load All Bugs": { "main": [[{ "node": "Analyse Bug Queue", "type": "main", "index": 0 }]] },
+    "Analyse Bug Queue": { "main": [[{ "node": "Claude Queue Analyst", "type": "main", "index": 0 }]] },
+    "Claude Queue Analyst": { "main": [[{ "node": "Build Digest Email", "type": "main", "index": 0 }]] },
+    "Build Digest Email": { "main": [[{ "node": "Send Digest", "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "settings": { "executionOrder": "v1", "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "staticData": null,
+  "tags": ["engineering", "bugs", "triage", "devops"],
+  "triggerCount": 1,
+  "updatedAt": "2025-05-05T11:00:00.000Z",
+  "versionId": "v1.0.0"
+}

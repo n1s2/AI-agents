@@ -1,0 +1,236 @@
+{
+  "name": "Client Onboarding Automator",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "onboard-client",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "w3z6c9f2-0001",
+      "name": "Webhook – New Client",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['client_name', 'client_email', 'service_type', 'account_manager'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) {\n  return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\n}\nreturn [{\n  json: {\n    valid: true,\n    clientId: `CL-${Date.now()}`,\n    clientName: body.client_name.trim(),\n    clientEmail: body.client_email.trim(),\n    clientCompany: body.client_company || '',\n    clientPhone: body.client_phone || '',\n    serviceType: body.service_type.trim(),\n    packageTier: body.package_tier || 'standard',\n    accountManager: body.account_manager.trim(),\n    accountManagerEmail: body.account_manager_email || null,\n    startDate: body.start_date || new Date().toISOString().split('T')[0],\n    contractValue: parseFloat(body.contract_value) || null,\n    currency: body.currency || 'USD',\n    projectDetails: (body.project_details || '').slice(0, 800),\n    specificNeeds: (body.specific_needs || '').slice(0, 500),\n    notifySlack: body.notify_slack_channel || null,\n    requestedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "w3z6c9f2-0002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 320]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-v",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "w3z6c9f2-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [640, 320]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "w3z6c9f2-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [860, 500]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.CLIENTS_SHEET_ID}}",
+        "sheetName": "Clients",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "client_id": "={{ $json.clientId }}",
+            "client_name": "={{ $json.clientName }}",
+            "client_email": "={{ $json.clientEmail }}",
+            "client_company": "={{ $json.clientCompany }}",
+            "service_type": "={{ $json.serviceType }}",
+            "package_tier": "={{ $json.packageTier }}",
+            "account_manager": "={{ $json.accountManager }}",
+            "start_date": "={{ $json.startDate }}",
+            "contract_value": "={{ $json.contractValue }}",
+            "currency": "={{ $json.currency }}",
+            "status": "onboarding",
+            "created_at": "={{ $json.requestedAt }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "w3z6c9f2-0005",
+      "name": "Save to CRM Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [860, 240],
+      "credentials": { "googleSheetsOAuth2Api": { "id": "google-creds-01", "name": "Google Sheets" } }
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": { "temperature": 0.55, "maxTokens": 2200 },
+        "messages": {
+          "values": [
+            {
+              "content": "You generate client onboarding materials for professional services businesses. You write clearly and warmly — these documents represent the client's first formal experience with the company after signing.\n\nYou tailor everything to the specific service type and client context. A welcome email for a law firm client reads differently from one for a digital marketing client.\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Generate onboarding materials for this new client.\n\nClient: {{ $json.clientName }}{{ $json.clientCompany ? ' at ' + $json.clientCompany : '' }}\nEmail: {{ $json.clientEmail }}\nService: {{ $json.serviceType }}\nPackage/tier: {{ $json.packageTier }}\nAccount manager: {{ $json.accountManager }}\nStart date: {{ $json.startDate }}\nContract value: {{ $json.contractValue ? $json.currency + $json.contractValue : 'not specified' }}\nProject details: {{ $json.projectDetails || 'not provided' }}\nSpecific needs: {{ $json.specificNeeds || 'none noted' }}\n\nGenerate this JSON:\n{\n  \"welcome_email\": {\n    \"subject\": \"email subject line\",\n    \"body\": \"warm, professional welcome email from the account manager to the client. Confirm what they've signed up for, what happens next, and how to reach the team. Under 200 words. No generic filler.\"\n  },\n  \"internal_handoff_note\": {\n    \"subject\": \"internal subject line\",\n    \"body\": \"note to the account manager and team summarizing who this client is, what they need, key context, and what the first week should look like. Under 150 words.\"\n  },\n  \"onboarding_checklist\": [\n    {\n      \"phase\": \"Week 1 / Week 2 / Month 1 / Ongoing\",\n      \"owner\": \"Account Manager / Client / Both\",\n      \"task\": \"specific task description\",\n      \"notes\": \"why this matters or how to do it\"\n    }\n  ],\n  \"kickoff_meeting_agenda\": [\n    {\n      \"item\": \"agenda item\",\n      \"duration_minutes\": 10,\n      \"purpose\": \"what this segment accomplishes\"\n    }\n  ],\n  \"success_metrics\": [\"3-5 specific measurable outcomes that would indicate successful onboarding for this service type\"],\n  \"red_flags_to_watch\": [\"2-3 early warning signs that onboarding is going poorly for this type of client/service\"]\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "w3z6c9f2-0006",
+      "name": "Claude Onboarding Writer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [1080, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet materials;\ntry {\n  materials = JSON.parse(raw.replace(/```json|```/g, '').trim());\n} catch(e) {\n  return [{ json: { error: 'Parse error', raw } }];\n}\nconst input = $('Validate Input').first().json;\nmaterials._client = {\n  clientId: input.clientId,\n  clientName: input.clientName,\n  clientEmail: input.clientEmail,\n  clientCompany: input.clientCompany,\n  serviceType: input.serviceType,\n  accountManager: input.accountManager,\n  accountManagerEmail: input.accountManagerEmail,\n  startDate: input.startDate,\n  notifySlack: input.notifySlack\n};\nreturn [{ json: materials }];"
+      },
+      "id": "w3z6c9f2-0007",
+      "name": "Parse Materials",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 240]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json._client.clientEmail}}",
+        "subject": "={{$json.welcome_email.subject}}",
+        "emailType": "text",
+        "message": "={{$json.welcome_email.body}}"
+      },
+      "id": "w3z6c9f2-0008",
+      "name": "Send Welcome Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1520, 160],
+      "credentials": { "smtp": { "id": "smtp-creds-01", "name": "SMTP Account" } }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-am",
+              "leftValue": "={{ $json._client.accountManagerEmail }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "w3z6c9f2-0009",
+      "name": "AM Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1520, 320]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json._client.accountManagerEmail}}",
+        "subject": "={{$json.internal_handoff_note.subject}}",
+        "emailType": "html",
+        "message": "<h3>New Client Onboarding — {{ $json._client.clientName }}</h3><p>{{ $json.internal_handoff_note.body.replace(/\\n/g,'<br>') }}</p><hr><h4>Onboarding Checklist</h4><ul>{{ $json.onboarding_checklist.map(t => '<li><strong>' + t.phase + ' · ' + t.owner + ':</strong> ' + t.task + (t.notes ? ' <em>— ' + t.notes + '</em>' : '') + '</li>').join('') }}</ul><hr><h4>Kickoff Agenda</h4><ol>{{ $json.kickoff_meeting_agenda.map(a => '<li>' + a.item + ' (' + a.duration_minutes + ' min) — ' + a.purpose + '</li>').join('') }}</ol>"
+      },
+      "id": "w3z6c9f2-0010",
+      "name": "Send Internal Handoff",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1740, 260],
+      "credentials": { "smtp": { "id": "smtp-creds-01", "name": "SMTP Account" } }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cond-slack",
+              "leftValue": "={{ $json._client.notifySlack || '' }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "w3z6c9f2-0011",
+      "name": "Slack?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1520, 480]
+    },
+    {
+      "parameters": {
+        "channel": "={{ $('Parse Materials').first().json._client.notifySlack }}",
+        "text": "🎉 *New client onboarded!*\n\n*{{ $('Parse Materials').first().json._client.clientName }}*{{ $('Parse Materials').first().json._client.clientCompany ? ' — ' + $('Parse Materials').first().json._client.clientCompany : '' }}\nService: {{ $('Parse Materials').first().json._client.serviceType }}\nAM: {{ $('Parse Materials').first().json._client.accountManager }}\nStart: {{ $('Parse Materials').first().json._client.startDate }}\nID: {{ $('Parse Materials').first().json._client.clientId }}\n\nWelcome email sent ✓",
+        "otherOptions": {}
+      },
+      "id": "w3z6c9f2-0012",
+      "name": "Slack Notification",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1740, 480],
+      "credentials": { "slackApi": { "id": "slack-creds-01", "name": "Slack Account" } }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'onboarded', client_id: $('Parse Materials').first().json._client.clientId, client_name: $('Parse Materials').first().json._client.clientName, welcome_email_sent: true, materials: $('Parse Materials').first().json } }}"
+      },
+      "id": "w3z6c9f2-0013",
+      "name": "Return Confirmation",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1960, 320]
+    }
+  ],
+  "connections": {
+    "Webhook – New Client": { "main": [[{ "node": "Validate Input", "type": "main", "index": 0 }]] },
+    "Validate Input": { "main": [[{ "node": "Valid?", "type": "main", "index": 0 }]] },
+    "Valid?": { "main": [[{ "node": "Save to CRM Sheet", "type": "main", "index": 0 }], [{ "node": "Return Error", "type": "main", "index": 0 }]] },
+    "Save to CRM Sheet": { "main": [[{ "node": "Claude Onboarding Writer", "type": "main", "index": 0 }]] },
+    "Claude Onboarding Writer": { "main": [[{ "node": "Parse Materials", "type": "main", "index": 0 }]] },
+    "Parse Materials": { "main": [[{ "node": "Send Welcome Email", "type": "main", "index": 0 }, { "node": "AM Email?", "type": "main", "index": 0 }, { "node": "Slack?", "type": "main", "index": 0 }]] },
+    "Send Welcome Email": { "main": [[{ "node": "Return Confirmation", "type": "main", "index": 0 }]] },
+    "AM Email?": { "main": [[{ "node": "Send Internal Handoff", "type": "main", "index": 0 }], [{ "node": "Return Confirmation", "type": "main", "index": 0 }]] },
+    "Send Internal Handoff": { "main": [[{ "node": "Return Confirmation", "type": "main", "index": 0 }]] },
+    "Slack?": { "main": [[{ "node": "Slack Notification", "type": "main", "index": 0 }], []] }
+  },
+  "pinData": {},
+  "settings": { "executionOrder": "v1", "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "staticData": null,
+  "tags": ["crm", "onboarding", "clients", "automation"],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-05T10:00:00.000Z",
+  "versionId": "v1.0.0"
+}
