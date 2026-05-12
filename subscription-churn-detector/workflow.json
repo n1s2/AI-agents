@@ -1,0 +1,152 @@
+{
+  "name": "Subscription Churn Risk Detector",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "days", "daysInterval": 1, "triggerAtHour": 7, "triggerAtMinute": 0 }]
+        }
+      },
+      "id": "y5b8e2h4-0001",
+      "name": "Daily 7am Scan",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [200, 260]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "churn-check",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "y5b8e2h4-0002",
+      "name": "Webhook – Manual Check",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 480]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.CHURN_SHEET_ID}}",
+        "sheetName": "Subscribers",
+        "options": {}
+      },
+      "id": "y5b8e2h4-0003",
+      "name": "Load Subscribers",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [420, 260],
+      "credentials": { "googleSheetsOAuth2Api": { "id": "google-creds-01", "name": "Google Sheets" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(r => r.json).filter(r => r.customer_id && r.status === 'active');\nconst today = new Date();\ntoday.setHours(0,0,0,0);\n\nconst atRisk = [];\n\nfor (const row of rows) {\n  const signals = [];\n  let riskScore = 0;\n\n  const lastLogin = row.last_login_date ? new Date(row.last_login_date) : null;\n  const daysSinceLogin = lastLogin ? Math.floor((today - lastLogin) / 86400000) : 999;\n\n  const lastPayment = row.last_payment_date ? new Date(row.last_payment_date) : null;\n  const nextRenewal = row.next_renewal_date ? new Date(row.next_renewal_date) : null;\n  const daysToRenewal = nextRenewal ? Math.floor((nextRenewal - today) / 86400000) : null;\n\n  const usageScore = parseFloat(row.weekly_usage_score) || 0;\n  const supportTickets30d = parseInt(row.support_tickets_30d) || 0;\n  const paymentFailures = parseInt(row.payment_failures_90d) || 0;\n  const npsScore = row.nps_score !== '' && row.nps_score !== undefined ? parseFloat(row.nps_score) : null;\n  const planDowngraded = row.plan_downgraded === 'TRUE' || row.plan_downgraded === true;\n  const cancelAttempt = row.cancel_attempt === 'TRUE' || row.cancel_attempt === true;\n\n  // Score signals\n  if (daysSinceLogin > 30) { signals.push(`no login in ${daysSinceLogin} days`); riskScore += 25; }\n  else if (daysSinceLogin > 14) { signals.push(`login gap: ${daysSinceLogin} days`); riskScore += 10; }\n\n  if (usageScore < 20) { signals.push(`low usage score: ${usageScore}`); riskScore += 20; }\n  else if (usageScore < 40) { signals.push(`declining usage: ${usageScore}`); riskScore += 10; }\n\n  if (paymentFailures > 0) { signals.push(`${paymentFailures} payment failure(s)`); riskScore += paymentFailures >= 2 ? 30 : 15; }\n\n  if (supportTickets30d >= 3) { signals.push(`${supportTickets30d} support tickets in 30d`); riskScore += 15; }\n\n  if (npsScore !== null && npsScore <= 6) { signals.push(`NPS detractor: ${npsScore}`); riskScore += 20; }\n  else if (npsScore !== null && npsScore <= 7) { signals.push(`NPS passive: ${npsScore}`); riskScore += 8; }\n\n  if (planDowngraded) { signals.push('plan downgraded'); riskScore += 25; }\n  if (cancelAttempt) { signals.push('cancel attempt logged'); riskScore += 40; }\n\n  if (daysToRenewal !== null && daysToRenewal <= 14 && riskScore > 20) {\n    signals.push(`renewal in ${daysToRenewal} days`);\n    riskScore += 10;\n  }\n\n  if (riskScore < 20) continue;\n\n  const riskLevel = riskScore >= 60 ? 'high' : riskScore >= 35 ? 'medium' : 'low';\n\n  atRisk.push({\n    customerId: row.customer_id,\n    customerName: row.customer_name || 'Unknown',\n    customerEmail: row.customer_email || '',\n    plan: row.plan || '',\n    mrr: parseFloat(row.mrr) || 0,\n    currency: row.currency || 'USD',\n    riskScore,\n    riskLevel,\n    signals,\n    daysSinceLogin,\n    usageScore,\n    daysToRenewal,\n    csm: row.csm || '',\n    notes: row.notes || ''\n  });\n}\n\natRisk.sort((a, b) => b.riskScore - a.riskScore);\n\nconst totalMrrAtRisk = atRisk.reduce((s, c) => s + c.mrr, 0);\nconst highRisk = atRisk.filter(c => c.riskLevel === 'high');\nconst medRisk = atRisk.filter(c => c.riskLevel === 'medium');\n\nreturn [{\n  json: {\n    atRisk,\n    highRisk,\n    medRisk,\n    totalAtRisk: atRisk.length,\n    totalMrrAtRisk: parseFloat(totalMrrAtRisk.toFixed(2)),\n    totalScanned: rows.length,\n    scanDate: today.toISOString().split('T')[0]\n  }\n}];"
+      },
+      "id": "y5b8e2h4-0004",
+      "name": "Score Churn Risk",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 260]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [{ "id": "cond-any", "leftValue": "={{ $json.totalAtRisk }}", "rightValue": 0, "operator": { "type": "number", "operation": "gt" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "y5b8e2h4-0005",
+      "name": "Anyone At Risk?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [860, 260]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": { "temperature": 0.5, "maxTokens": 1200 },
+        "messages": {
+          "values": [
+            {
+              "content": "You are a customer success lead who reviews churn risk reports. You look at the data and give specific, actionable recommendations — not generic advice like 'reach out to at-risk customers'.\n\nYou prioritize by revenue impact and signal strength. You suggest specific outreach angles based on the actual signals. Keep the whole note under 250 words. Write plainly.",
+              "role": "system"
+            },
+            {
+              "content": "Review this churn risk report and give action recommendations.\n\nDate: {{ $json.scanDate }}\nTotal scanned: {{ $json.totalScanned }}\nAt risk: {{ $json.totalAtRisk }} ({{ $json.highRisk.length }} high, {{ $json.medRisk.length }} medium)\nMRR at risk: {{ $json.atRisk[0]?.currency || 'USD' }}{{ $json.totalMrrAtRisk }}/month\n\nHigh risk accounts:\n{{ $json.highRisk.slice(0,8).map(c => `- ${c.customerName} (${c.plan}, MRR: ${c.currency}${c.mrr}) — score ${c.riskScore}: ${c.signals.join(', ')}`).join('\\n') || 'none' }}\n\nMedium risk:\n{{ $json.medRisk.slice(0,5).map(c => `- ${c.customerName} — ${c.signals.join(', ')}`).join('\\n') || 'none' }}\n\nGive: (1) the 2-3 highest-priority interventions today, (2) a pattern observation across the at-risk cohort if one exists, (3) one systemic fix if the signals suggest a product or process problem.",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "y5b8e2h4-0006",
+      "name": "Claude Churn Analyst",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [1080, 180]
+    },
+    {
+      "parameters": {
+        "jsCode": "const note = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nconst d = $('Score Churn Risk').first().json;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst riskColor = { high: '#dc2626', medium: '#d97706', low: '#2563eb' };\nconst riskBg   = { high: '#fef2f2', medium: '#fffbeb', low: '#eff6ff' };\n\nconst customerRows = d.atRisk.slice(0, 20).map(c => {\n  const signals = c.signals.map(s => `<span style=\"display:inline-block;background:#f3f4f6;font-size:11px;padding:2px 7px;border-radius:8px;margin:2px 2px 0 0\">${esc(s)}</span>`).join('');\n  return `<tr style=\"border-bottom:1px solid #f3f4f6\">\n    <td style=\"padding:10px 12px\">\n      <div style=\"font-size:14px;font-weight:600\">${esc(c.customerName)}</div>\n      <div style=\"font-size:12px;color:#9ca3af\">${esc(c.plan)}${c.csm ? ' · CSM: ' + esc(c.csm) : ''}</div>\n    </td>\n    <td style=\"padding:10px 12px;text-align:right;font-size:13px;font-weight:600\">${c.currency}${c.mrr}</td>\n    <td style=\"padding:10px 12px;text-align:center\">\n      <span style=\"background:${riskBg[c.riskLevel]};color:${riskColor[c.riskLevel]};font-size:11px;font-weight:700;padding:3px 9px;border-radius:10px;text-transform:uppercase\">${c.riskLevel}</span>\n    </td>\n    <td style=\"padding:10px 12px;font-size:12px;font-weight:700;text-align:center;color:${riskColor[c.riskLevel]}\">${c.riskScore}</td>\n    <td style=\"padding:10px 12px\">${signals}</td>\n  </tr>`;\n}).join('');\n\nconst noteHtml = note.replace(/\\*\\*(.+?)\\*\\*/g,'<strong>$1</strong>').replace(/\\n/g,'<br>');\nconst cur = d.atRisk[0]?.currency || 'USD';\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f9fafb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111\">\n<div style=\"max-width:720px;margin:0 auto\">\n  <div style=\"background:#111827;color:#fff;padding:20px 28px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#6b7280;margin-bottom:5px\">Churn Risk Report · ${esc(d.scanDate)}</div>\n    <div style=\"font-size:19px;font-weight:700\">${d.totalAtRisk} accounts at risk · ${cur}${d.totalMrrAtRisk}/mo MRR</div>\n    <div style=\"font-size:13px;color:#9ca3af;margin-top:3px\">${d.highRisk.length} high · ${d.medRisk.length} medium · scanned ${d.totalScanned} active subscribers</div>\n  </div>\n  <div style=\"background:#fff;padding:18px 28px;border:1px solid #e5e7eb;border-top:none\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9ca3af;margin-bottom:8px\">CS Lead Analysis</div>\n    <p style=\"font-size:14px;line-height:1.75;color:#374151;margin:0\">${noteHtml}</p>\n  </div>\n  <div style=\"background:#fff;padding:18px 28px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9ca3af;margin-bottom:10px\">At-risk accounts</div>\n    <table style=\"width:100%;border-collapse:collapse\">\n      <thead><tr style=\"font-size:11px;text-transform:uppercase;color:#9ca3af\">\n        <th style=\"padding:7px 12px;text-align:left\">Customer</th>\n        <th style=\"padding:7px 12px;text-align:right\">MRR</th>\n        <th style=\"padding:7px 12px;text-align:center\">Risk</th>\n        <th style=\"padding:7px 12px;text-align:center\">Score</th>\n        <th style=\"padding:7px 12px;text-align:left\">Signals</th>\n      </tr></thead>\n      <tbody>${customerRows}</tbody>\n    </table>\n  </div>\n  <div style=\"background:#111827;color:#4b5563;font-size:11px;padding:12px 28px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Churn Risk Detector · ${esc(d.scanDate)} · ${d.totalScanned} subscribers scanned\n  </div>\n</div>\n</body></html>`;\n\nreturn [{ json: { html, totalAtRisk: d.totalAtRisk, highRiskCount: d.highRisk.length, totalMrrAtRisk: d.totalMrrAtRisk, currency: cur } }];"
+      },
+      "id": "y5b8e2h4-0007",
+      "name": "Build Report Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 180]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$env.CS_TEAM_EMAIL}}",
+        "subject": "Churn risk: {{ $json.highRiskCount }} high-risk · {{ $json.currency }}{{ $json.totalMrrAtRisk }}/mo at risk · {{ new Date().toISOString().split('T')[0] }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "y5b8e2h4-0008",
+      "name": "Email CS Team",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1520, 180],
+      "credentials": { "smtp": { "id": "smtp-creds-01", "name": "SMTP Account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nconst rows = $('Load Subscribers').all().map(r => r.json).filter(r => r.customer_id);\nconst targetId = body.customer_id || '';\nconst found = rows.filter(r => !targetId || r.customer_id === targetId);\nreturn found.map(r => ({ json: r }));"
+      },
+      "id": "y5b8e2h4-0009",
+      "name": "Filter Subscriber",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 480]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'checked', total_at_risk: $('Score Churn Risk').first().json.totalAtRisk, high_risk: $('Score Churn Risk').first().json.highRisk.length, mrr_at_risk: $('Score Churn Risk').first().json.totalMrrAtRisk, at_risk_accounts: $('Score Churn Risk').first().json.atRisk } }}"
+      },
+      "id": "y5b8e2h4-0010",
+      "name": "Return Results",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1520, 380]
+    }
+  ],
+  "connections": {
+    "Daily 7am Scan": { "main": [[{ "node": "Load Subscribers", "type": "main", "index": 0 }]] },
+    "Load Subscribers": { "main": [[{ "node": "Score Churn Risk", "type": "main", "index": 0 }]] },
+    "Score Churn Risk": { "main": [[{ "node": "Anyone At Risk?", "type": "main", "index": 0 }]] },
+    "Anyone At Risk?": { "main": [[{ "node": "Claude Churn Analyst", "type": "main", "index": 0 }], []] },
+    "Claude Churn Analyst": { "main": [[{ "node": "Build Report Email", "type": "main", "index": 0 }]] },
+    "Build Report Email": { "main": [[{ "node": "Email CS Team", "type": "main", "index": 0 }, { "node": "Return Results", "type": "main", "index": 0 }]] },
+    "Webhook – Manual Check": { "main": [[{ "node": "Load Subscribers", "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "settings": { "executionOrder": "v1", "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "staticData": null,
+  "tags": ["saas", "churn", "customer-success", "retention"],
+  "triggerCount": 1,
+  "updatedAt": "2025-05-06T07:00:00.000Z",
+  "versionId": "v1.0.0"
+}

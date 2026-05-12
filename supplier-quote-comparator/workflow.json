@@ -1,0 +1,151 @@
+{
+  "name": "Supplier Quote Comparator Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "compare-quotes",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a7d1g4j6-0001",
+      "name": "Webhook – Submit Quotes",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['item_description', 'quotes'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nif (!Array.isArray(body.quotes) || body.quotes.length < 2) return [{ json: { valid: false, error: 'Need at least 2 quotes to compare' } }];\nif (body.quotes.length > 8) return [{ json: { valid: false, error: 'Maximum 8 quotes per comparison' } }];\n\nconst quotes = body.quotes.map((q, i) => {\n  const unitPrice = parseFloat(q.unit_price) || 0;\n  const quantity = parseFloat(body.quantity) || 1;\n  const totalPrice = parseFloat(q.total_price) || (unitPrice * quantity);\n  const deliveryDays = parseInt(q.delivery_days) || null;\n  const deliveryCost = parseFloat(q.delivery_cost) || 0;\n  const allInTotal = totalPrice + deliveryCost;\n  return {\n    id: `Q${i+1}`,\n    supplierName: q.supplier_name || `Supplier ${i+1}`,\n    unitPrice,\n    totalPrice,\n    deliveryCost,\n    allInTotal: parseFloat(allInTotal.toFixed(2)),\n    deliveryDays,\n    paymentTerms: q.payment_terms || '',\n    warranty: q.warranty || '',\n    certifications: q.certifications || '',\n    moq: parseInt(q.moq) || null,\n    notes: (q.notes || '').slice(0, 400),\n    quoteDate: q.quote_date || '',\n    validUntil: q.valid_until || ''\n  };\n});\n\nquotes.sort((a, b) => a.allInTotal - b.allInTotal);\nconst lowestTotal = quotes[0].allInTotal;\nquotes.forEach(q => {\n  q.premiumVsLowest = lowestTotal > 0 ? parseFloat(((q.allInTotal - lowestTotal) / lowestTotal * 100).toFixed(1)) : 0;\n});\n\nreturn [{\n  json: {\n    valid: true,\n    itemDescription: body.item_description.trim(),\n    quantity: parseFloat(body.quantity) || 1,\n    unit: body.unit || 'units',\n    currency: body.currency || 'USD',\n    priorityFactors: body.priority_factors || 'price, delivery, quality',\n    additionalContext: (body.additional_context || '').slice(0, 500),\n    replyEmail: body.reply_email || null,\n    quotes\n  }\n}];"
+      },
+      "id": "a7d1g4j6-0002",
+      "name": "Validate & Enrich Quotes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 320]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [{ "id": "cv", "leftValue": "={{ $json.valid }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "a7d1g4j6-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [640, 320]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "a7d1g4j6-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [860, 480]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": { "temperature": 0.3, "maxTokens": 1400 },
+        "messages": {
+          "values": [
+            {
+              "content": "You are a procurement specialist who analyzes supplier quotes. You look at the full picture — not just price, but total landed cost, payment terms cash flow impact, delivery reliability risk, warranty, and any red flags in the notes.\n\nYou give a clear recommendation with your reasoning. You acknowledge when it's close and explain the deciding factor. You flag things that look unusual or missing.\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Compare these supplier quotes and give a recommendation.\n\nItem: {{ $json.itemDescription }}\nQuantity: {{ $json.quantity }} {{ $json.unit }}\nCurrency: {{ $json.currency }}\nPriority factors: {{ $json.priorityFactors }}\nAdditional context: {{ $json.additionalContext || 'none' }}\n\nQuotes (sorted by all-in price):\n{{ $json.quotes.map(q => `${q.id}: ${q.supplierName}\\n  Unit price: ${$json.currency}${q.unitPrice} | Total: ${$json.currency}${q.totalPrice} | Delivery: ${$json.currency}${q.deliveryCost} | ALL-IN: ${$json.currency}${q.allInTotal} (+${q.premiumVsLowest}% vs lowest)\\n  Delivery: ${q.deliveryDays ? q.deliveryDays + ' days' : 'not specified'} | Payment: ${q.paymentTerms || 'not specified'} | Warranty: ${q.warranty || 'none'} | Certs: ${q.certifications || 'none'} | MOQ: ${q.moq || 'none'}\\n  Notes: ${q.notes || 'none'}`).join('\\n\\n') }}\n\nReturn this JSON:\n{\n  \"recommendation\": \"Q1\",\n  \"recommended_supplier\": \"supplier name\",\n  \"confidence\": \"high | medium | low\",\n  \"recommendation_rationale\": \"2-3 sentences — why this quote wins, referencing specific numbers\",\n  \"runner_up\": \"Q? or null\",\n  \"runner_up_note\": \"one sentence on when you'd choose runner-up instead — null if clear winner\",\n  \"quote_analysis\": [\n    {\n      \"id\": \"Q1\",\n      \"supplier\": \"name\",\n      \"verdict\": \"one of: recommended | strong | acceptable | avoid\",\n      \"pros\": [\"specific pros\"],\n      \"cons\": [\"specific cons\"],\n      \"red_flags\": [\"anything unusual or missing that should concern the buyer — empty array if none\"]\n    }\n  ],\n  \"negotiation_leverage\": \"one specific piece of advice on how to negotiate with the recommended supplier using the other quotes as leverage\",\n  \"missing_information\": [\"things not provided in any quote that you'd want before finalizing — empty if complete\"],\n  \"total_cost_of_ownership_note\": \"any payment terms, warranty, or hidden cost considerations that affect the real comparison beyond sticker price\"\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "a7d1g4j6-0005",
+      "name": "Claude Procurement Analyst",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [860, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet analysis;\ntry {\n  analysis = JSON.parse(raw.replace(/```json|```/g,'').trim());\n} catch(e) {\n  return [{ json: { error: 'Parse error', raw } }];\n}\nconst input = $('Validate & Enrich Quotes').first().json;\nanalysis._meta = { itemDescription: input.itemDescription, quantity: input.quantity, unit: input.unit, currency: input.currency, quotes: input.quotes, replyEmail: input.replyEmail };\nreturn [{ json: analysis }];"
+      },
+      "id": "a7d1g4j6-0006",
+      "name": "Parse Analysis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const a = $input.first().json;\nconst m = a._meta;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nconst cur = m.currency;\n\nconst verdictConfig = { recommended: { color:'#16a34a', bg:'#f0fdf4', label:'Recommended' }, strong: { color:'#2563eb', bg:'#eff6ff', label:'Strong' }, acceptable: { color:'#d97706', bg:'#fffbeb', label:'Acceptable' }, avoid: { color:'#dc2626', bg:'#fef2f2', label:'Avoid' } };\nconst confColor = { high:'#16a34a', medium:'#d97706', low:'#dc2626' };\n\nconst quoteCards = (a.quote_analysis||[]).map(qa => {\n  const raw = m.quotes.find(q => q.id === qa.id) || {};\n  const vc = verdictConfig[qa.verdict] || verdictConfig.acceptable;\n  const isRec = qa.id === a.recommendation;\n  return `<div style=\"border:2px solid ${isRec ? '#16a34a' : '#e5e7eb'};border-radius:8px;margin-bottom:14px;overflow:hidden\">\n    <div style=\"background:${isRec ? '#f0fdf4' : '#f9fafb'};padding:10px 16px;display:flex;justify-content:space-between;align-items:center\">\n      <div>\n        <strong style=\"font-size:14px\">${esc(raw.supplierName)}</strong>\n        <span style=\"font-size:12px;color:#9ca3af;margin-left:8px\">${qa.id}</span>\n        ${isRec ? '<span style=\"margin-left:8px;font-size:12px;font-weight:700;color:#16a34a\">★ RECOMMENDED</span>' : ''}\n      </div>\n      <div style=\"text-align:right\">\n        <div style=\"font-size:16px;font-weight:700\">${cur}${raw.allInTotal}</div>\n        ${raw.premiumVsLowest > 0 ? `<div style=\"font-size:11px;color:#9ca3af\">+${raw.premiumVsLowest}% vs lowest</div>` : '<div style=\"font-size:11px;color:#16a34a\">lowest price</div>'}\n      </div>\n    </div>\n    <div style=\"padding:12px 16px\">\n      <div style=\"display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;font-size:12px;color:#6b7280;margin-bottom:10px\">\n        <span>Delivery: ${raw.deliveryDays ? raw.deliveryDays+'d' : '?'}</span>\n        <span>Terms: ${esc(raw.paymentTerms||'?')}</span>\n        <span>Warranty: ${esc(raw.warranty||'none')}</span>\n      </div>\n      <div style=\"display:grid;grid-template-columns:1fr 1fr;gap:12px\">\n        <div><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#16a34a;margin-bottom:4px\">Pros</div>${(qa.pros||[]).map(p=>`<div style=\"font-size:13px;color:#374151;margin-bottom:3px\">+ ${esc(p)}</div>`).join('')}</div>\n        <div><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#dc2626;margin-bottom:4px\">Cons</div>${(qa.cons||[]).map(c=>`<div style=\"font-size:13px;color:#374151;margin-bottom:3px\">− ${esc(c)}</div>`).join('')}</div>\n      </div>\n      ${(qa.red_flags||[]).length ? `<div style=\"margin-top:10px;background:#fffbeb;border-left:3px solid #f59e0b;padding:8px 12px;border-radius:0 4px 4px 0\">${(qa.red_flags||[]).map(rf=>`<div style=\"font-size:12px;color:#92400e\">⚠ ${esc(rf)}</div>`).join('')}</div>` : ''}\n    </div>\n  </div>`;\n}).join('');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f9fafb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111\">\n<div style=\"max-width:680px;margin:0 auto\">\n  <div style=\"background:#111827;color:#fff;padding:20px 26px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#6b7280;margin-bottom:5px\">Supplier Quote Comparison</div>\n    <div style=\"font-size:18px;font-weight:700\">${esc(m.itemDescription)}</div>\n    <div style=\"font-size:13px;color:#9ca3af;margin-top:3px\">${m.quantity} ${esc(m.unit)} · ${m.quotes.length} quotes compared</div>\n  </div>\n  <div style=\"background:#f0fdf4;padding:16px 26px;border:1px solid #bbf7d0;border-top:none\">\n    <div style=\"display:flex;justify-content:space-between;align-items:center\">\n      <div>\n        <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#15803d;margin-bottom:4px\">Recommendation · <span style=\"color:${confColor[a.confidence]||'#6b7280'}\">${esc(a.confidence)} confidence</span></div>\n        <div style=\"font-size:16px;font-weight:700;color:#166534\">${esc(a.recommended_supplier)}</div>\n        <p style=\"font-size:14px;color:#374151;margin:6px 0 0;line-height:1.6\">${esc(a.recommendation_rationale)}</p>\n      </div>\n    </div>\n    ${a.runner_up_note ? `<div style=\"margin-top:10px;font-size:13px;color:#4b5563;font-style:italic\">Runner-up note: ${esc(a.runner_up_note)}</div>` : ''}\n  </div>\n  <div style=\"background:#fff;padding:18px 26px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9ca3af;margin-bottom:12px\">Quote by quote</div>\n    ${quoteCards}\n  </div>\n  ${a.negotiation_leverage ? `<div style=\"background:#eff6ff;padding:14px 26px;border:1px solid #bfdbfe\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#1d4ed8;margin-bottom:5px\">Negotiation leverage</div>\n    <div style=\"font-size:14px;color:#1e40af;line-height:1.6\">${esc(a.negotiation_leverage)}</div>\n  </div>` : ''}\n  ${(a.missing_information||[]).length ? `<div style=\"background:#fffbeb;padding:14px 26px;border:1px solid #fde68a\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#92400e;margin-bottom:6px\">Before deciding — ask for</div>\n    ${(a.missing_information||[]).map(mi=>`<div style=\"font-size:14px;color:#78350f;padding:3px 0\">• ${esc(mi)}</div>`).join('')}\n  </div>` : ''}\n  ${a.total_cost_of_ownership_note ? `<div style=\"background:#fff;padding:14px 26px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:5px\">Total cost of ownership note</div>\n    <div style=\"font-size:14px;color:#374151;line-height:1.6\">${esc(a.total_cost_of_ownership_note)}</div>\n  </div>` : ''}\n  <div style=\"background:#111827;color:#4b5563;font-size:11px;padding:12px 26px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Supplier Quote Comparator · ${new Date().toLocaleDateString()}\n  </div>\n</div>\n</body></html>`;\n\nreturn [{ json: { html, replyEmail: m.replyEmail, itemDescription: m.itemDescription, recommendedSupplier: a.recommended_supplier, quoteCount: m.quotes.length, analysis: a } }];"
+      },
+      "id": "a7d1g4j6-0007",
+      "name": "Build Comparison Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 240]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [{ "id": "ce", "leftValue": "={{ $json.replyEmail }}", "rightValue": "", "operator": { "type": "string", "operation": "notEmpty" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "a7d1g4j6-0008",
+      "name": "Has Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1520, 240]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.replyEmail}}",
+        "subject": "Quote comparison: {{ $json.itemDescription }} — {{ $json.quoteCount }} quotes · Recommend: {{ $json.recommendedSupplier }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "a7d1g4j6-0009",
+      "name": "Email Report",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1740, 180],
+      "credentials": { "smtp": { "id": "smtp-creds-01", "name": "SMTP Account" } }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'compared', recommendation: $json.analysis.recommendation, recommended_supplier: $json.recommendedSupplier, confidence: $json.analysis.confidence, emailed: $json.replyEmail ? true : false, analysis: $json.analysis } }}"
+      },
+      "id": "a7d1g4j6-0010",
+      "name": "Return Analysis",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1960, 240]
+    }
+  ],
+  "connections": {
+    "Webhook – Submit Quotes": { "main": [[{ "node": "Validate & Enrich Quotes", "type": "main", "index": 0 }]] },
+    "Validate & Enrich Quotes": { "main": [[{ "node": "Valid?", "type": "main", "index": 0 }]] },
+    "Valid?": { "main": [[{ "node": "Claude Procurement Analyst", "type": "main", "index": 0 }], [{ "node": "Return Error", "type": "main", "index": 0 }]] },
+    "Claude Procurement Analyst": { "main": [[{ "node": "Parse Analysis", "type": "main", "index": 0 }]] },
+    "Parse Analysis": { "main": [[{ "node": "Build Comparison Report", "type": "main", "index": 0 }]] },
+    "Build Comparison Report": { "main": [[{ "node": "Has Email?", "type": "main", "index": 0 }]] },
+    "Has Email?": { "main": [[{ "node": "Email Report", "type": "main", "index": 0 }], [{ "node": "Return Analysis", "type": "main", "index": 0 }]] },
+    "Email Report": { "main": [[{ "node": "Return Analysis", "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "settings": { "executionOrder": "v1", "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "staticData": null,
+  "tags": ["procurement", "purchasing", "suppliers", "comparison"],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-06T10:00:00.000Z",
+  "versionId": "v1.0.0"
+}

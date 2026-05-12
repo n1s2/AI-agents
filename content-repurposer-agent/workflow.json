@@ -1,0 +1,151 @@
+{
+  "name": "Content Repurposer Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "repurpose-content",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "z6c9f3i5-0001",
+      "name": "Webhook – Submit Content",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['source_content', 'source_type'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nif (body.source_content.trim().length < 100) return [{ json: { valid: false, error: 'source_content too short' } }];\n\nconst sourceTypes = ['blog_post', 'podcast_transcript', 'video_transcript', 'newsletter', 'webinar_notes', 'research_report', 'interview', 'thread', 'other'];\nconst sourceType = sourceTypes.includes(body.source_type) ? body.source_type : 'other';\n\nconst allFormats = ['linkedin_post', 'twitter_thread', 'email_newsletter', 'instagram_caption', 'youtube_description', 'tiktok_script', 'pull_quotes', 'key_takeaways', 'faq'];\nconst requestedFormats = Array.isArray(body.target_formats)\n  ? body.target_formats.filter(f => allFormats.includes(f))\n  : allFormats.slice(0, 4);\n\nreturn [{\n  json: {\n    valid: true,\n    sourceContent: body.source_content.trim().slice(0, 8000),\n    sourceType,\n    sourceTitle: body.source_title || '',\n    sourceAuthor: body.source_author || '',\n    targetFormats: requestedFormats,\n    brand: (body.brand_voice || '').slice(0, 400),\n    targetAudience: body.target_audience || '',\n    includeEmojis: body.include_emojis !== false,\n    replyEmail: body.reply_email || null,\n    requestedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "z6c9f3i5-0002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 320]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [{ "id": "cv", "leftValue": "={{ $json.valid }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "z6c9f3i5-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [640, 320]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "z6c9f3i5-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [860, 480]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": { "temperature": 0.72, "maxTokens": 3500 },
+        "messages": {
+          "values": [
+            {
+              "content": "You repurpose long-form content into platform-native formats. You understand that content doesn't just get shorter — it gets reshaped. A LinkedIn post is not a blog post excerpt. A Twitter thread is not a listicle. Each format has its own grammar.\n\nYou extract the strongest ideas and angles, not just the first few paragraphs. You write each format as if it were created natively for that platform.\n\nFormat rules:\n- linkedin_post: 150–300 words, hook in first line, no hashtag spam (1-2 max), paragraph breaks for readability\n- twitter_thread: 6–10 tweets, each under 280 chars, numbered, first tweet is the hook\n- email_newsletter: subject line + 200–350 word body, conversational, clear CTA\n- instagram_caption: punchy opener, 100–200 words, 5–8 relevant hashtags at end\n- youtube_description: 150–250 words, timestamps if chapter structure is apparent, keywords natural\n- tiktok_script: spoken word, 45–60 seconds (~130–150 words, energetic, hook in first 3 seconds)\n- pull_quotes: 3–5 standalone quotes (15–40 words each) suitable for image overlays\n- key_takeaways: 5–7 bullet points, actionable, concrete\n- faq: 4–6 Q&A pairs based on what the content actually answers\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Repurpose this content into the requested formats.\n\nSource type: {{ $json.sourceType }}\nTitle: {{ $json.sourceTitle || 'untitled' }}\nAuthor: {{ $json.sourceAuthor || 'not specified' }}\nTarget audience: {{ $json.targetAudience || 'general professional' }}\nBrand voice notes: {{ $json.brand || 'none — use tone from source' }}\nInclude emojis: {{ $json.includeEmojis }}\nFormats requested: {{ $json.targetFormats.join(', ') }}\n\nSource content:\n{{ $json.sourceContent }}\n\nReturn this JSON:\n{\n  \"content_summary\": \"2 sentences on what this content is about and its strongest angle\",\n  \"best_performing_angle\": \"the single most shareable/engaging idea in this content — be specific\",\n  \"formats\": {\n    \"linkedin_post\": \"full post text or null if not requested\",\n    \"twitter_thread\": [\"tweet 1\", \"tweet 2\"] or null,\n    \"email_newsletter\": { \"subject\": \"...\", \"body\": \"...\" } or null,\n    \"instagram_caption\": \"full caption with hashtags or null\",\n    \"youtube_description\": \"full description or null\",\n    \"tiktok_script\": \"full spoken script or null\",\n    \"pull_quotes\": [\"quote 1\", \"quote 2\"] or null,\n    \"key_takeaways\": [\"takeaway 1\"] or null,\n    \"faq\": [{ \"q\": \"question\", \"a\": \"answer\" }] or null\n  }\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "z6c9f3i5-0005",
+      "name": "Claude Content Repurposer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [860, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet repurposed;\ntry {\n  repurposed = JSON.parse(raw.replace(/```json|```/g,'').trim());\n} catch(e) {\n  return [{ json: { error: 'Parse error', raw } }];\n}\nconst input = $('Validate Input').first().json;\nrepurposed._meta = { sourceTitle: input.sourceTitle, sourceType: input.sourceType, targetFormats: input.targetFormats, replyEmail: input.replyEmail };\nreturn [{ json: repurposed }];"
+      },
+      "id": "z6c9f3i5-0006",
+      "name": "Parse Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nconst m = r._meta;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst formatLabel = { linkedin_post:'LinkedIn Post', twitter_thread:'Twitter/X Thread', email_newsletter:'Email Newsletter', instagram_caption:'Instagram Caption', youtube_description:'YouTube Description', tiktok_script:'TikTok Script', pull_quotes:'Pull Quotes', key_takeaways:'Key Takeaways', faq:'FAQ' };\nconst formatIcon = { linkedin_post:'💼', twitter_thread:'🐦', email_newsletter:'📧', instagram_caption:'📸', youtube_description:'▶️', tiktok_script:'🎵', pull_quotes:'💬', key_takeaways:'✅', faq:'❓' };\n\nconst formatBlocks = (m.targetFormats || []).map(fmt => {\n  const content = r.formats?.[fmt];\n  if (!content) return '';\n\n  let rendered = '';\n  if (fmt === 'twitter_thread' && Array.isArray(content)) {\n    rendered = content.map((t,i) => `<div style=\"font-size:14px;padding:8px 0;border-bottom:1px solid #f0f0f0;line-height:1.6\">${esc(t)}</div>`).join('');\n  } else if (fmt === 'email_newsletter' && typeof content === 'object') {\n    rendered = `<div style=\"font-size:12px;color:#9ca3af;margin-bottom:4px\">Subject: <strong>${esc(content.subject)}</strong></div><div style=\"font-size:14px;line-height:1.75;white-space:pre-wrap\">${esc(content.body)}</div>`;\n  } else if (fmt === 'pull_quotes' && Array.isArray(content)) {\n    rendered = content.map(q => `<div style=\"border-left:3px solid #6366f1;padding:10px 14px;background:#f5f3ff;border-radius:0 6px 6px 0;margin-bottom:8px;font-size:14px;font-style:italic;line-height:1.6\">${esc(q)}</div>`).join('');\n  } else if (fmt === 'key_takeaways' && Array.isArray(content)) {\n    rendered = `<ul style=\"padding-left:18px;margin:0\">${content.map(t => `<li style=\"font-size:14px;margin-bottom:7px;line-height:1.55\">${esc(t)}</li>`).join('')}</ul>`;\n  } else if (fmt === 'faq' && Array.isArray(content)) {\n    rendered = content.map(qa => `<div style=\"margin-bottom:12px\"><div style=\"font-size:14px;font-weight:600;color:#111;margin-bottom:3px\">Q: ${esc(qa.q)}</div><div style=\"font-size:14px;color:#555;line-height:1.6\">A: ${esc(qa.a)}</div></div>`).join('');\n  } else {\n    rendered = `<div style=\"font-size:14px;line-height:1.75;white-space:pre-wrap\">${esc(String(content))}</div>`;\n  }\n\n  return `<div style=\"background:#fff;padding:18px 26px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6;margin-top:0\">\n    <div style=\"font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9ca3af;margin-bottom:10px\">${formatIcon[fmt]||''} ${formatLabel[fmt]||fmt}</div>\n    ${rendered}\n  </div>`;\n}).join('');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f9fafb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111\">\n<div style=\"max-width:680px;margin:0 auto\">\n  <div style=\"background:#111827;color:#fff;padding:20px 26px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#6b7280;margin-bottom:5px\">Content Repurposer · ${esc(m.sourceType.replace(/_/g,' '))}</div>\n    <div style=\"font-size:18px;font-weight:700\">${esc(m.sourceTitle||'Untitled')}</div>\n    <div style=\"font-size:13px;color:#9ca3af;margin-top:4px\">${(m.targetFormats||[]).length} formats generated</div>\n  </div>\n  <div style=\"background:#f0f9ff;padding:14px 26px;border:1px solid #bae6fd;border-top:none\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#0369a1;margin-bottom:4px\">Best angle</div>\n    <div style=\"font-size:14px;color:#1e40af;line-height:1.6\">${esc(r.best_performing_angle)}</div>\n  </div>\n  ${formatBlocks}\n  <div style=\"background:#111827;color:#4b5563;font-size:11px;padding:12px 26px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Content Repurposer · ${new Date().toLocaleDateString()}\n  </div>\n</div>\n</body></html>`;\n\nreturn [{ json: { html, replyEmail: m.replyEmail, sourceTitle: m.sourceTitle, formatCount: (m.targetFormats||[]).length, repurposed: r } }];"
+      },
+      "id": "z6c9f3i5-0007",
+      "name": "Build Output Doc",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 240]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [{ "id": "ce", "leftValue": "={{ $json.replyEmail }}", "rightValue": "", "operator": { "type": "string", "operation": "notEmpty" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "z6c9f3i5-0008",
+      "name": "Has Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1520, 240]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.replyEmail}}",
+        "subject": "Repurposed content: {{ $json.sourceTitle || 'your content' }} — {{ $json.formatCount }} formats ready",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "z6c9f3i5-0009",
+      "name": "Email Output",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1740, 180],
+      "credentials": { "smtp": { "id": "smtp-creds-01", "name": "SMTP Account" } }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'repurposed', formats_generated: $json.formatCount, emailed: $json.replyEmail ? true : false, content: $json.repurposed } }}"
+      },
+      "id": "z6c9f3i5-0010",
+      "name": "Return Output",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1960, 240]
+    }
+  ],
+  "connections": {
+    "Webhook – Submit Content": { "main": [[{ "node": "Validate Input", "type": "main", "index": 0 }]] },
+    "Validate Input": { "main": [[{ "node": "Valid?", "type": "main", "index": 0 }]] },
+    "Valid?": { "main": [[{ "node": "Claude Content Repurposer", "type": "main", "index": 0 }], [{ "node": "Return Error", "type": "main", "index": 0 }]] },
+    "Claude Content Repurposer": { "main": [[{ "node": "Parse Output", "type": "main", "index": 0 }]] },
+    "Parse Output": { "main": [[{ "node": "Build Output Doc", "type": "main", "index": 0 }]] },
+    "Build Output Doc": { "main": [[{ "node": "Has Email?", "type": "main", "index": 0 }]] },
+    "Has Email?": { "main": [[{ "node": "Email Output", "type": "main", "index": 0 }], [{ "node": "Return Output", "type": "main", "index": 0 }]] },
+    "Email Output": { "main": [[{ "node": "Return Output", "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "settings": { "executionOrder": "v1", "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "staticData": null,
+  "tags": ["content", "marketing", "social-media", "repurposing"],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-06T09:00:00.000Z",
+  "versionId": "v1.0.0"
+}
