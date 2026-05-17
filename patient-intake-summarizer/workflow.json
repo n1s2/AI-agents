@@ -1,0 +1,78 @@
+{
+  "name": "Patient Intake Summarizer Agent",
+  "nodes": [
+    {
+      "parameters": { "httpMethod": "POST", "path": "patient-intake", "responseMode": "responseNode", "options": {} },
+      "id": "d1g4j7m9-0001", "name": "Webhook – Submit Intake",
+      "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [200, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['patient_id', 'chief_complaint', 'provider_name'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nreturn [{ json: { valid: true, patientId: body.patient_id.trim(), patientAge: parseInt(body.patient_age)||null, patientSex: body.patient_sex||'', providerName: body.provider_name.trim(), appointmentType: body.appointment_type||'general', chiefComplaint: body.chief_complaint.trim().slice(0,1000), symptomsDescription: (body.symptoms_description||'').slice(0,2000), symptomDuration: body.symptom_duration||'', symptomSeverity: body.symptom_severity||'', currentMedications: (body.current_medications||'').slice(0,800), allergies: body.allergies||'', relevantHistory: (body.relevant_history||'').slice(0,1000), recentLabsOrTests: (body.recent_labs_or_tests||'').slice(0,600), patientConcerns: (body.patient_concerns||'').slice(0,600), insuranceNotes: body.insurance_notes||'', flagForUrgent: body.flag_for_urgent===true||body.flag_for_urgent==='true', submittedAt: new Date().toISOString() } }];"
+      },
+      "id": "d1g4j7m9-0002", "name": "Validate Input",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [420, 320]
+    },
+    {
+      "parameters": { "conditions": { "conditions": [{ "id": "cv", "leftValue": "={{ $json.valid }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }], "combinator": "and" } },
+      "id": "d1g4j7m9-0003", "name": "Valid?",
+      "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [640, 320]
+    },
+    {
+      "parameters": { "respondWith": "json", "responseBody": "={{ { error: $json.error, status: 400 } }}" },
+      "id": "d1g4j7m9-0004", "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1, "position": [860, 480]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": { "temperature": 0.15, "maxTokens": 1800 },
+        "messages": { "values": [
+          { "content": "You are a clinical documentation assistant. You summarize patient intake information into a concise, structured pre-visit brief for the provider.\n\nYour job is to organize and clarify — not diagnose. Surface what the provider needs to know before walking into the room: the presenting problem, relevant context, what the patient is worried about, and anything that warrants attention.\n\nUse clear clinical language. Be precise. Do not add clinical interpretations beyond what the data supports. Flag anything that looks incomplete or potentially urgent.\n\nThis is NOT a diagnostic tool. The summary is a documentation aid only.\n\nAlways respond in valid JSON only.", "role": "system" },
+          { "content": "Summarize this patient intake for the provider.\n\nPatient ID: {{ $json.patientId }}\nAge: {{ $json.patientAge || 'not provided' }} | Sex: {{ $json.patientSex || 'not provided' }}\nProvider: {{ $json.providerName }}\nAppointment type: {{ $json.appointmentType }}\nFlagged urgent: {{ $json.flagForUrgent }}\n\nChief complaint: {{ $json.chiefComplaint }}\nSymptoms: {{ $json.symptomsDescription || 'not provided' }}\nDuration: {{ $json.symptomDuration || 'not specified' }}\nSeverity: {{ $json.symptomSeverity || 'not specified' }}\n\nMedications: {{ $json.currentMedications || 'none listed' }}\nAllergies: {{ $json.allergies || 'none listed' }}\nRelevant history: {{ $json.relevantHistory || 'none provided' }}\nRecent labs/tests: {{ $json.recentLabsOrTests || 'none provided' }}\nPatient concerns: {{ $json.patientConcerns || 'none noted' }}\n\nReturn this JSON:\n{\n  \"visit_summary\": \"2-3 sentence overview in clinical language\",\n  \"chief_complaint_formatted\": \"clean clinical statement\",\n  \"symptom_summary\": [{ \"symptom\": \"name\", \"duration\": \"how long\", \"severity\": \"descriptor\", \"character\": \"additional detail\" }],\n  \"active_medications\": [\"medication list\"],\n  \"allergy_summary\": \"formatted allergy statement or NKDA\",\n  \"relevant_history_summary\": \"brief summary\",\n  \"patient_concerns\": [\"what patient wants addressed\"],\n  \"documentation_gaps\": [\"missing information typically collected for this complaint\"],\n  \"urgency_flags\": [\"anything warranting prompt attention — empty if nothing concerning\"],\n  \"suggested_review_items\": [\"items provider may want to verify — NOT diagnoses, just documentation prompts\"]\n}", "role": "user" }
+        ]}
+      },
+      "id": "d1g4j7m9-0005", "name": "Claude Intake Summarizer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic", "typeVersion": 1.3, "position": [860, 240]
+    },
+    {
+      "parameters": { "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet summary;\ntry { summary = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst input = $('Validate Input').first().json;\nsummary._intake = { patientId: input.patientId, patientAge: input.patientAge, patientSex: input.patientSex, providerName: input.providerName, appointmentType: input.appointmentType, flagForUrgent: input.flagForUrgent, submittedAt: input.submittedAt };\nreturn [{ json: summary }];" },
+      "id": "d1g4j7m9-0006", "name": "Parse Summary",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1080, 240]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate", "documentId": "={{$env.INTAKE_SHEET_ID}}", "sheetName": "Intakes",
+        "columns": { "mappingMode": "defineBelow", "value": { "submitted_at": "={{ $json._intake.submittedAt }}", "patient_id": "={{ $json._intake.patientId }}", "provider": "={{ $json._intake.providerName }}", "appointment_type": "={{ $json._intake.appointmentType }}", "chief_complaint": "={{ $json.chief_complaint_formatted }}", "visit_summary": "={{ $json.visit_summary }}", "urgency_flags": "={{ ($json.urgency_flags||[]).join(' | ') }}", "documentation_gaps": "={{ ($json.documentation_gaps||[]).join(' | ') }}", "flag_for_urgent": "={{ $json._intake.flagForUrgent }}" } }, "options": {}
+      },
+      "id": "d1g4j7m9-0007", "name": "Log to Sheet",
+      "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.3, "position": [1300, 160],
+      "credentials": { "googleSheetsOAuth2Api": { "id": "google-creds-01", "name": "Google Sheets" } }
+    },
+    {
+      "parameters": { "jsCode": "const s = $input.first().json;\nconst intake = s._intake;\nfunction esc(t) { return String(t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nconst hasUrgency = (s.urgency_flags||[]).length > 0 || intake.flagForUrgent;\nconst symptomRows = (s.symptom_summary||[]).map(sym => `<tr style=\"border-bottom:1px solid #f0f0f0\"><td style=\"padding:7px 12px;font-size:14px;font-weight:600\">${esc(sym.symptom)}</td><td style=\"padding:7px 12px;font-size:13px;color:#6b7280\">${esc(sym.duration||'?')}</td><td style=\"padding:7px 12px;font-size:13px;color:#6b7280\">${esc(sym.severity||'?')}</td><td style=\"padding:7px 12px;font-size:13px;color:#6b7280\">${esc(sym.character||'')}</td></tr>`).join('');\nconst listBlock = (items, color) => (items||[]).length ? `<ul style=\"padding-left:18px;margin:0\">${(items||[]).map(i=>`<li style=\"font-size:13px;margin-bottom:5px;color:${color||'#374151'};line-height:1.5\">${esc(i)}</li>`).join('')}</ul>` : '<div style=\"font-size:13px;color:#9ca3af\">None</div>';\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body style=\"margin:0;padding:16px;background:#f5f5f3;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111\"><div style=\"max-width:680px;margin:0 auto\"><div style=\"background:${hasUrgency?'#7f1d1d':'#1e3a5f'};color:#fff;padding:18px 26px;border-radius:10px 10px 0 0\"><div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:${hasUrgency?'#fca5a5':'#93b4d4'};margin-bottom:5px\">Pre-Visit Summary · ${esc(intake.appointmentType)}${hasUrgency?' · ⚠ URGENT':''}</div><div style=\"font-size:18px;font-weight:700\">Patient ${esc(intake.patientId)}${intake.patientAge?' · '+intake.patientAge+'y':''}${intake.patientSex?' · '+esc(intake.patientSex):''}</div><div style=\"font-size:13px;color:${hasUrgency?'#fca5a5':'#93b4d4'};margin-top:3px\">Provider: ${esc(intake.providerName)} · ${esc(intake.submittedAt.split('T')[0])}</div></div>${(s.urgency_flags||[]).length?`<div style=\"background:#fef2f2;padding:14px 26px;border:1px solid #fecaca;border-top:none\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#b91c1c;margin-bottom:7px\">⚠ Urgency flags</div>${(s.urgency_flags||[]).map(f=>`<div style=\"font-size:14px;color:#7f1d1d;padding:3px 0;font-weight:500\">${esc(f)}</div>`).join('')}</div>`:''}<div style=\"background:#fff;padding:16px 26px;border:1px solid #e5e7eb;border-top:none\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:6px\">Chief complaint</div><div style=\"font-size:16px;font-weight:600;color:#111;margin-bottom:10px\">${esc(s.chief_complaint_formatted)}</div><p style=\"font-size:14px;line-height:1.7;color:#374151;margin:0\">${esc(s.visit_summary)}</p></div>${symptomRows?`<div style=\"background:#fff;padding:16px 26px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:8px\">Symptoms</div><table style=\"width:100%;border-collapse:collapse\"><thead><tr style=\"font-size:11px;text-transform:uppercase;color:#9ca3af\"><th style=\"padding:6px 12px;text-align:left\">Symptom</th><th style=\"padding:6px 12px;text-align:left\">Duration</th><th style=\"padding:6px 12px;text-align:left\">Severity</th><th style=\"padding:6px 12px;text-align:left\">Character</th></tr></thead><tbody>${symptomRows}</tbody></table></div>`:''}<div style=\"background:#fff;padding:16px 26px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\"><div style=\"display:grid;grid-template-columns:1fr 1fr;gap:16px\"><div><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:6px\">Medications</div>${listBlock(s.active_medications,'#374151')}</div><div><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:6px\">Allergies</div><div style=\"font-size:14px;color:#374151\">${esc(s.allergy_summary||'Not documented')}</div></div></div></div><div style=\"background:#fff;padding:16px 26px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:6px\">Relevant history</div><div style=\"font-size:14px;color:#374151;line-height:1.65\">${esc(s.relevant_history_summary)}</div></div>${(s.patient_concerns||[]).length?`<div style=\"background:#eff6ff;padding:14px 26px;border:1px solid #bfdbfe\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#1d4ed8;margin-bottom:6px\">Patient concerns</div>${listBlock(s.patient_concerns,'#1e40af')}</div>`:''  }${(s.documentation_gaps||[]).length?`<div style=\"background:#fffbeb;padding:12px 26px;border:1px solid #fde68a\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#92400e;margin-bottom:5px\">Documentation gaps</div>${listBlock(s.documentation_gaps,'#78350f')}</div>`:''  }${(s.suggested_review_items||[]).length?`<div style=\"background:#f8f8f8;padding:12px 26px;border:1px solid #e5e7eb\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:5px\">Provider review items</div>${listBlock(s.suggested_review_items,'#374151')}</div>`:''  }<div style=\"background:#1e3a5f;color:#4a7fa5;font-size:10px;padding:10px 26px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">Documentation aid only · Not a diagnostic tool · ${esc(intake.submittedAt.split('T')[0])}</div></div></body></html>`;\nreturn [{ json: { html, patientId: intake.patientId, providerName: intake.providerName, hasUrgency, summary: s } }];" },
+      "id": "d1g4j7m9-0008", "name": "Build Provider Brief",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1300, 320]
+    },
+    {
+      "parameters": { "respondWith": "json", "responseBody": "={{ { status: 'summarized', patient_id: $json.patientId, provider: $json.providerName, has_urgency_flags: $json.hasUrgency, summary: $json.summary } }}" },
+      "id": "d1g4j7m9-0009", "name": "Return Summary",
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1, "position": [1520, 320]
+    }
+  ],
+  "connections": {
+    "Webhook – Submit Intake": { "main": [[{ "node": "Validate Input", "type": "main", "index": 0 }]] },
+    "Validate Input": { "main": [[{ "node": "Valid?", "type": "main", "index": 0 }]] },
+    "Valid?": { "main": [[{ "node": "Claude Intake Summarizer", "type": "main", "index": 0 }], [{ "node": "Return Error", "type": "main", "index": 0 }]] },
+    "Claude Intake Summarizer": { "main": [[{ "node": "Parse Summary", "type": "main", "index": 0 }]] },
+    "Parse Summary": { "main": [[{ "node": "Log to Sheet", "type": "main", "index": 0 }, { "node": "Build Provider Brief", "type": "main", "index": 0 }]] },
+    "Build Provider Brief": { "main": [[{ "node": "Return Summary", "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "settings": { "executionOrder": "v1", "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "staticData": null,
+  "tags": ["healthcare", "clinical", "documentation", "intake"],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-07T11:00:00.000Z",
+  "versionId": "v1.0.0"
+}
