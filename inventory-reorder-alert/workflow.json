@@ -1,0 +1,405 @@
+{
+  "name": "Inventory Reorder Alert Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 8,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "f3i6l9o2-0001",
+      "name": "Daily 8am Scan",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        200,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "update-stock",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "f3i6l9o2-0002",
+      "name": "Webhook \u2013 Update Stock",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.INVENTORY_SHEET_ID}}",
+        "sheetName": "Inventory",
+        "options": {}
+      },
+      "id": "f3i6l9o2-0003",
+      "name": "Load Inventory",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        420,
+        260
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(r => r.json).filter(r => r.sku && r.product_name);\nconst today = new Date();\nconst alerts = [];\nconst criticalItems = [];\nconst watchItems = [];\n\nfor (const row of rows) {\n  const currentStock = parseFloat(row.current_stock) || 0;\n  const reorderPoint = parseFloat(row.reorder_point) || 0;\n  const reorderQty = parseFloat(row.reorder_qty) || 0;\n  const leadTimeDays = parseInt(row.lead_time_days) || 7;\n  const avgDailySales = parseFloat(row.avg_daily_sales) || 0;\n  const unitCost = parseFloat(row.unit_cost) || 0;\n  const supplierName = row.supplier_name || '';\n  const supplierEmail = row.supplier_email || '';\n  const lastOrdered = row.last_ordered_date ? new Date(row.last_ordered_date) : null;\n  const daysSinceOrder = lastOrdered ? Math.floor((today - lastOrdered) / 86400000) : 999;\n\n  const daysOfStockLeft = avgDailySales > 0 ? Math.floor(currentStock / avgDailySales) : 999;\n  const stockoutRisk = daysOfStockLeft <= leadTimeDays;\n  const belowReorderPoint = currentStock <= reorderPoint;\n  const reorderCost = reorderQty * unitCost;\n\n  if (!belowReorderPoint && !stockoutRisk) continue;\n\n  const urgency = currentStock === 0 ? 'out_of_stock' : stockoutRisk && daysOfStockLeft <= 2 ? 'critical' : belowReorderPoint ? 'reorder_now' : 'watch';\n\n  const item = {\n    sku: row.sku,\n    productName: row.product_name,\n    category: row.category || '',\n    currentStock,\n    reorderPoint,\n    reorderQty,\n    leadTimeDays,\n    avgDailySales,\n    daysOfStockLeft: daysOfStockLeft === 999 ? null : daysOfStockLeft,\n    unitCost,\n    reorderCost: parseFloat(reorderCost.toFixed(2)),\n    supplierName,\n    supplierEmail,\n    daysSinceOrder,\n    urgency,\n    notes: row.notes || ''\n  };\n\n  alerts.push(item);\n  if (urgency === 'out_of_stock' || urgency === 'critical') criticalItems.push(item);\n  else watchItems.push(item);\n}\n\nalerts.sort((a, b) => {\n  const order = {out_of_stock:0, critical:1, reorder_now:2, watch:3};\n  return (order[a.urgency]||9) - (order[b.urgency]||9);\n});\n\nconst totalReorderCost = alerts.filter(a => a.urgency !== 'watch').reduce((s,a) => s + a.reorderCost, 0);\nconst currency = rows[0]?.currency || 'USD';\n\nreturn [{ json: { alerts, criticalItems, watchItems, totalAlerts: alerts.length, totalReorderCost: parseFloat(totalReorderCost.toFixed(2)), currency, scanDate: today.toISOString().split('T')[0], totalSkus: rows.length } }];"
+      },
+      "id": "f3i6l9o2-0004",
+      "name": "Check Reorder Levels",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "ca",
+              "leftValue": "={{ $json.totalAlerts }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "f3i6l9o2-0005",
+      "name": "Any Alerts?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        860,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.4,
+          "maxTokens": 600
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are an inventory manager who writes concise daily stock alerts. You prioritize by urgency and revenue impact. You note patterns \u2014 if multiple items from the same supplier are low, that's worth flagging. You suggest whether to expedite any orders. Under 180 words.",
+              "role": "system"
+            },
+            {
+              "content": "Summarize today's inventory alerts.\n\nDate: {{ $json.scanDate }}\nTotal SKUs scanned: {{ $json.totalSkus }}\nItems needing attention: {{ $json.totalAlerts }}\nEstimated reorder cost: {{ $json.currency }}{{ $json.totalReorderCost }}\n\nCritical/out of stock ({{ $json.criticalItems.length }}):\n{{ $json.criticalItems.map(i => `- ${i.productName} (SKU: ${i.sku}): ${i.currentStock} units left, ${i.daysOfStockLeft !== null ? i.daysOfStockLeft + 'd stock remaining' : 'no sales data'}, supplier: ${i.supplierName||'unknown'}`).join('\\n') || 'none' }}\n\nReorder now ({{ $json.watchItems.filter(i => i.urgency === 'reorder_now').length }}):\n{{ $json.alerts.filter(i => i.urgency === 'reorder_now').map(i => `- ${i.productName}: ${i.currentStock} units (reorder point: ${i.reorderPoint})`).join('\\n') || 'none' }}\n\nGive: what needs immediate action, any patterns across suppliers, one operational note.",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "f3i6l9o2-0006",
+      "name": "Claude Inventory Analyst",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        1060,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const note = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nconst d = $('Check Reorder Levels').first().json;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nconst urgencyConfig = {\n  out_of_stock: {color:'#dc2626', bg:'#fef2f2', label:'OUT OF STOCK'},\n  critical:     {color:'#ea580c', bg:'#fff7ed', label:'CRITICAL'},\n  reorder_now:  {color:'#d97706', bg:'#fffbeb', label:'REORDER NOW'},\n  watch:        {color:'#2563eb', bg:'#eff6ff', label:'WATCH'}\n};\nconst cur = d.currency;\nconst rows = d.alerts.slice(0,25).map(item => {\n  const uc = urgencyConfig[item.urgency]||urgencyConfig.watch;\n  return `<tr style=\"border-bottom:1px solid #f3f4f6\">\n    <td style=\"padding:9px 12px\"><div style=\"font-size:14px;font-weight:600\">${esc(item.productName)}</div><div style=\"font-size:11px;color:#9ca3af\">${esc(item.sku)}${item.category?' \u00b7 '+esc(item.category):''}</div></td>\n    <td style=\"padding:9px 12px;text-align:center\"><span style=\"background:${uc.bg};color:${uc.color};font-size:10px;font-weight:700;padding:2px 7px;border-radius:8px\">${uc.label}</span></td>\n    <td style=\"padding:9px 12px;text-align:right;font-size:14px;font-weight:600;color:${item.currentStock===0?'#dc2626':'#111'}\">${item.currentStock}</td>\n    <td style=\"padding:9px 12px;text-align:right;font-size:13px;color:#6b7280\">${item.reorderPoint}</td>\n    <td style=\"padding:9px 12px;text-align:right;font-size:13px\">${item.daysOfStockLeft!==null?item.daysOfStockLeft+'d':'\u2014'}</td>\n    <td style=\"padding:9px 12px;text-align:right;font-size:13px\">${item.reorderQty}</td>\n    <td style=\"padding:9px 12px;text-align:right;font-size:13px;font-weight:600\">${cur}${item.reorderCost}</td>\n    <td style=\"padding:9px 12px;font-size:12px;color:#6b7280\">${esc(item.supplierName)}</td>\n  </tr>`;\n}).join('');\nconst noteHtml = note.replace(/\\*\\*(.+?)\\*\\*/g,'<strong>$1</strong>').replace(/\\n/g,'<br>');\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head>\n<body style=\"margin:0;padding:16px;background:#f9fafb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111\">\n<div style=\"max-width:800px;margin:0 auto\">\n  <div style=\"background:#111827;color:#fff;padding:18px 26px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#6b7280;margin-bottom:4px\">Inventory Alert \u00b7 ${esc(d.scanDate)}</div>\n    <div style=\"font-size:18px;font-weight:700\">${d.totalAlerts} items need attention \u00b7 ${cur}${d.totalReorderCost} reorder cost</div>\n    <div style=\"font-size:13px;color:#9ca3af;margin-top:3px\">${d.criticalItems.length} critical \u00b7 ${d.totalSkus} SKUs scanned</div>\n  </div>\n  <div style=\"background:#fff;padding:16px 26px;border:1px solid #e5e7eb;border-top:none\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:7px\">Inventory analyst note</div>\n    <p style=\"font-size:14px;line-height:1.75;color:#374151;margin:0\">${noteHtml}</p>\n  </div>\n  <div style=\"background:#fff;padding:0;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <table style=\"width:100%;border-collapse:collapse\">\n      <thead><tr style=\"background:#f9fafb;font-size:11px;text-transform:uppercase;color:#9ca3af\">\n        <th style=\"padding:8px 12px;text-align:left\">Product</th>\n        <th style=\"padding:8px 12px;text-align:center\">Status</th>\n        <th style=\"padding:8px 12px;text-align:right\">Stock</th>\n        <th style=\"padding:8px 12px;text-align:right\">Reorder pt</th>\n        <th style=\"padding:8px 12px;text-align:right\">Days left</th>\n        <th style=\"padding:8px 12px;text-align:right\">Order qty</th>\n        <th style=\"padding:8px 12px;text-align:right\">Order cost</th>\n        <th style=\"padding:8px 12px;text-align:left\">Supplier</th>\n      </tr></thead>\n      <tbody>${rows}</tbody>\n    </table>\n  </div>\n  <div style=\"background:#111827;color:#4b5563;font-size:11px;padding:10px 26px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Inventory Reorder Alert \u00b7 ${esc(d.scanDate)}\n  </div>\n</div></body></html>`;\nreturn [{ json: { html, totalAlerts: d.totalAlerts, criticalCount: d.criticalItems.length, totalReorderCost: d.totalReorderCost, currency: cur } }];"
+      },
+      "id": "f3i6l9o2-0007",
+      "name": "Build Alert Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$env.OPS_EMAIL}}",
+        "subject": "Inventory alert: {{ $json.criticalCount }} critical \u00b7 {{ $json.currency }}{{ $json.totalReorderCost }} to reorder \u00b7 {{ new Date().toISOString().split('T')[0] }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "f3i6l9o2-0008",
+      "name": "Send Alert Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1500,
+        180
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nif (!body.sku || body.current_stock === undefined) return [{ json: { valid: false, error: 'Missing sku or current_stock' } }];\nreturn [{ json: { valid: true, sku: body.sku.trim(), currentStock: parseFloat(body.current_stock), notes: body.notes || '', updatedAt: new Date().toISOString() } }];"
+      },
+      "id": "f3i6l9o2-0009",
+      "name": "Validate Stock Update",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "csv",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "f3i6l9o2-0010",
+      "name": "Stock Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": "={{$env.INVENTORY_SHEET_ID}}",
+        "sheetName": "Inventory",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "sku": "={{ $json.sku }}",
+            "current_stock": "={{ $json.currentStock }}",
+            "notes": "={{ $json.notes }}",
+            "last_updated": "={{ $json.updatedAt }}"
+          }
+        },
+        "options": {
+          "handlingExtraData": "insertInNewColumn"
+        }
+      },
+      "id": "f3i6l9o2-0011",
+      "name": "Update Stock Level",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        860,
+        480
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'updated', sku: $json.sku, current_stock: $json.currentStock } }}"
+      },
+      "id": "f3i6l9o2-0012",
+      "name": "Confirm Update",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1080,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "f3i6l9o2-0013",
+      "name": "Return Stock Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        600
+      ]
+    }
+  ],
+  "connections": {
+    "Daily 8am Scan": {
+      "main": [
+        [
+          {
+            "node": "Load Inventory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Inventory": {
+      "main": [
+        [
+          {
+            "node": "Check Reorder Levels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Reorder Levels": {
+      "main": [
+        [
+          {
+            "node": "Any Alerts?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Alerts?": {
+      "main": [
+        [
+          {
+            "node": "Claude Inventory Analyst",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Claude Inventory Analyst": {
+      "main": [
+        [
+          {
+            "node": "Build Alert Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Alert Email": {
+      "main": [
+        [
+          {
+            "node": "Send Alert Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook \u2013 Update Stock": {
+      "main": [
+        [
+          {
+            "node": "Validate Stock Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Stock Update": {
+      "main": [
+        [
+          {
+            "node": "Stock Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stock Valid?": {
+      "main": [
+        [
+          {
+            "node": "Update Stock Level",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Stock Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Stock Level": {
+      "main": [
+        [
+          {
+            "node": "Confirm Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    "inventory",
+    "operations",
+    "ecommerce",
+    "supply-chain"
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2025-05-08T10:00:00.000Z",
+  "versionId": "v1.0.0"
+}

@@ -1,0 +1,539 @@
+{
+  "name": "Customer Testimonial Collector Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "request-testimonial",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "g4j7m1p3-0001",
+      "name": "Webhook \u2013 Request Testimonial",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "submit-testimonial",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "g4j7m1p3-0002",
+      "name": "Webhook \u2013 Submit Testimonial",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['customer_name', 'customer_email', 'product_or_service'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nreturn [{ json: {\n  valid: true,\n  customerId: body.customer_id || `C-${Date.now()}`,\n  customerName: body.customer_name.trim(),\n  customerEmail: body.customer_email.trim(),\n  customerTitle: body.customer_title || '',\n  customerCompany: body.customer_company || '',\n  productOrService: body.product_or_service.trim(),\n  useCase: (body.use_case || '').slice(0, 300),\n  successMetric: body.success_metric || '',\n  requestedBy: body.requested_by || '',\n  submissionUrl: body.submission_url || `${process.env.TESTIMONIAL_FORM_URL || 'https://your-form-url.com'}/testimonial`,\n  requestedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "g4j7m1p3-0003",
+      "name": "Validate Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cv",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "g4j7m1p3-0004",
+      "name": "Request Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "g4j7m1p3-0005",
+      "name": "Return Request Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.65,
+          "maxTokens": 400
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You write warm, personalized testimonial request emails for businesses. You make them feel like a genuine ask from a person who values the customer's opinion \u2014 not a mass email. You reference their specific use case and outcome if provided. Keep it under 120 words. Write only the email body, no subject line.",
+              "role": "system"
+            },
+            {
+              "content": "Write a testimonial request email to {{ $json.customerName }}.\n\nCompany sending request: using {{ $json.productOrService }}\nRequester: {{ $json.requestedBy || 'the team' }}\nCustomer title/company: {{ $json.customerTitle ? $json.customerTitle + ' at ' + $json.customerCompany : $json.customerCompany || 'not specified' }}\nTheir use case: {{ $json.useCase || 'not specified' }}\nKnown success metric: {{ $json.successMetric || 'not specified' }}\nSubmission link: {{ $json.submissionUrl }}\n\nWrite the email. It should feel personal and low-pressure. End with the link.",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "g4j7m1p3-0006",
+      "name": "Claude Request Writer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        860,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.TESTIMONIAL_SHEET_ID}}",
+        "sheetName": "Requests",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "customer_id": "={{ $('Validate Request').first().json.customerId }}",
+            "customer_name": "={{ $('Validate Request').first().json.customerName }}",
+            "customer_email": "={{ $('Validate Request').first().json.customerEmail }}",
+            "customer_company": "={{ $('Validate Request').first().json.customerCompany }}",
+            "product_or_service": "={{ $('Validate Request').first().json.productOrService }}",
+            "requested_at": "={{ $('Validate Request').first().json.requestedAt }}",
+            "status": "requested"
+          }
+        },
+        "options": {}
+      },
+      "id": "g4j7m1p3-0007",
+      "name": "Log Request",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        1060,
+        200
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{ $('Validate Request').first().json.customerEmail }}",
+        "subject": "Quick question about your experience with {{ $('Validate Request').first().json.productOrService }}",
+        "emailType": "text",
+        "message": "={{ $input.first().json.text || $input.first().json.content?.[0]?.text }}"
+      },
+      "id": "g4j7m1p3-0008",
+      "name": "Send Request Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1280,
+        200
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'requested', customer: $('Validate Request').first().json.customerName, email_sent: true } }}"
+      },
+      "id": "g4j7m1p3-0009",
+      "name": "Return Request Confirmation",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1500,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['raw_testimonial', 'customer_name'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nif (body.raw_testimonial.trim().length < 30) return [{ json: { valid: false, error: 'Testimonial too short' } }];\nreturn [{ json: {\n  valid: true,\n  testimonialId: `T-${Date.now()}`,\n  customerId: body.customer_id || '',\n  customerName: body.customer_name.trim(),\n  customerTitle: body.customer_title || '',\n  customerCompany: body.customer_company || '',\n  productOrService: body.product_or_service || '',\n  rawTestimonial: body.raw_testimonial.trim().slice(0, 2000),\n  rating: parseInt(body.rating) || null,\n  useCase: body.use_case || '',\n  permissionToPublish: body.permission_to_publish !== false,\n  preferredPlatforms: Array.isArray(body.preferred_platforms) ? body.preferred_platforms : [],\n  submittedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "g4j7m1p3-0010",
+      "name": "Validate Submission",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "csv",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "g4j7m1p3-0011",
+      "name": "Submission Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "g4j7m1p3-0012",
+      "name": "Return Submission Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.45,
+          "maxTokens": 1200
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You process raw customer testimonials. You polish them into publish-ready quotes while preserving the customer's authentic voice \u2014 you don't change their meaning or add claims they didn't make. You also create platform-adapted versions (shorter for social, fuller for case studies) and extract structured data for the marketing team.\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Process this customer testimonial.\n\nCustomer: {{ $json.customerName }}{{ $json.customerTitle ? ', ' + $json.customerTitle : '' }}{{ $json.customerCompany ? ' at ' + $json.customerCompany : '' }}\nProduct/service: {{ $json.productOrService || 'not specified' }}\nUse case: {{ $json.useCase || 'not specified' }}\nRating: {{ $json.rating ? $json.rating + '/5' : 'not given' }}\nPermission to publish: {{ $json.permissionToPublish }}\nPreferred platforms: {{ $json.preferredPlatforms.join(', ') || 'any' }}\n\nRaw testimonial:\n{{ $json.rawTestimonial }}\n\nReturn this JSON:\n{\n  \"quality_score\": 8,\n  \"quality_notes\": \"brief assessment \u2014 what makes this testimonial strong or weak for marketing use\",\n  \"polished_quote\": \"clean, publish-ready version \u2014 preserve their voice, fix obvious typos/grammar only, do not add claims\",\n  \"short_pull_quote\": \"15-25 word version for social media or image overlays \u2014 the single most impactful sentence\",\n  \"key_outcomes_mentioned\": [\"specific results or benefits the customer mentioned\"],\n  \"emotion_tags\": [\"2-4 emotional themes: e.g. relief, confidence, time-saved, trust\"],\n  \"use_case_tags\": [\"2-3 use case tags for searchable content library\"],\n  \"platform_versions\": {\n    \"website_hero\": \"1-2 sentence version for homepage or landing page\",\n    \"case_study\": \"full polished version with context, suitable for a detailed case study page\",\n    \"social_media\": \"tweet-length version under 240 chars, punchy\",\n    \"sales_deck\": \"version formatted for a sales presentation slide \u2014 concise and impactful\"\n  },\n  \"suggested_attribution\": \"First Last, Title, Company \u2014 formatted for display\",\n  \"publish_recommendation\": \"one of: feature_prominently | use_as_is | minor_edit_needed | needs_clarification | do_not_use\",\n  \"publish_recommendation_note\": \"why\"\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "g4j7m1p3-0013",
+      "name": "Claude Testimonial Processor",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        860,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet processed;\ntry { processed = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst input = $('Validate Submission').first().json;\nprocessed._submission = input;\nreturn [{ json: processed }];"
+      },
+      "id": "g4j7m1p3-0014",
+      "name": "Parse Processed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.TESTIMONIAL_SHEET_ID}}",
+        "sheetName": "Testimonials",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "testimonial_id": "={{ $json._submission.testimonialId }}",
+            "submitted_at": "={{ $json._submission.submittedAt }}",
+            "customer_id": "={{ $json._submission.customerId }}",
+            "customer_name": "={{ $json._submission.customerName }}",
+            "customer_company": "={{ $json._submission.customerCompany }}",
+            "product_or_service": "={{ $json._submission.productOrService }}",
+            "rating": "={{ $json._submission.rating }}",
+            "raw_testimonial": "={{ $json._submission.rawTestimonial }}",
+            "polished_quote": "={{ $json.polished_quote }}",
+            "short_pull_quote": "={{ $json.short_pull_quote }}",
+            "quality_score": "={{ $json.quality_score }}",
+            "publish_recommendation": "={{ $json.publish_recommendation }}",
+            "permission_to_publish": "={{ $json._submission.permissionToPublish }}",
+            "use_case_tags": "={{ $json.use_case_tags.join(', ') }}",
+            "emotion_tags": "={{ $json.emotion_tags.join(', ') }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "g4j7m1p3-0015",
+      "name": "Save Testimonial",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        1300,
+        500
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$env.MARKETING_EMAIL}}",
+        "subject": "New testimonial: {{ $json._submission.customerName }}{{ $json._submission.customerCompany ? ' at ' + $json._submission.customerCompany : '' }} \u00b7 score {{ $json.quality_score }}/10 \u00b7 {{ $json.publish_recommendation.replace(/_/g,' ') }}",
+        "emailType": "html",
+        "message": "<!DOCTYPE html><html><body style='font-family:sans-serif;max-width:600px;margin:0 auto;padding:16px'><div style='background:#111827;color:#fff;padding:16px 20px;border-radius:8px 8px 0 0'><h2 style='margin:0;font-size:17px'>New Testimonial</h2><div style='font-size:12px;color:#9ca3af;margin-top:3px'>{{ $json._submission.customerName }}{{ $json._submission.customerCompany ? \" \u00b7 \" + $json._submission.customerCompany : \"\" }} \u00b7 Score: {{ $json.quality_score }}/10</div></div><div style='background:#fff;border:1px solid #e5e7eb;padding:18px 20px'><p style='font-size:15px;font-style:italic;line-height:1.7;border-left:3px solid #6366f1;padding-left:14px;color:#374151'>{{ $json.polished_quote }}</p><div style='margin-top:14px'><strong>Pull quote:</strong> <em>{{ $json.short_pull_quote }}</em></div><div style='margin-top:10px'><strong>Recommendation:</strong> {{ $json.publish_recommendation.replace(/_/g,\" \") }}</div><div style='margin-top:6px;font-size:13px;color:#6b7280'>{{ $json.publish_recommendation_note }}</div><hr style='margin:16px 0'><div style='font-size:13px'><strong>Outcomes:</strong> {{ $json.key_outcomes_mentioned.join(\" \u00b7 \") }}</div><div style='font-size:13px;margin-top:4px'><strong>Tags:</strong> {{ $json.use_case_tags.join(\", \") }}</div><div style='font-size:13px;margin-top:4px'><strong>Platforms:</strong><br>Website: {{ $json.platform_versions.website_hero }}<br>Social: {{ $json.platform_versions.social_media }}</div></div></div></body></html>"
+      },
+      "id": "g4j7m1p3-0016",
+      "name": "Notify Marketing",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1520,
+        500
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'received', testimonial_id: $json._submission.testimonialId, quality_score: $json.quality_score, publish_recommendation: $json.publish_recommendation, polished_quote: $json.polished_quote, platform_versions: $json.platform_versions } }}"
+      },
+      "id": "g4j7m1p3-0017",
+      "name": "Return Processed",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1740,
+        500
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook \u2013 Request Testimonial": {
+      "main": [
+        [
+          {
+            "node": "Validate Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Request": {
+      "main": [
+        [
+          {
+            "node": "Request Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Request Valid?": {
+      "main": [
+        [
+          {
+            "node": "Claude Request Writer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Request Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Request Writer": {
+      "main": [
+        [
+          {
+            "node": "Log Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Request": {
+      "main": [
+        [
+          {
+            "node": "Send Request Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Request Email": {
+      "main": [
+        [
+          {
+            "node": "Return Request Confirmation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook \u2013 Submit Testimonial": {
+      "main": [
+        [
+          {
+            "node": "Validate Submission",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Submission": {
+      "main": [
+        [
+          {
+            "node": "Submission Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Submission Valid?": {
+      "main": [
+        [
+          {
+            "node": "Claude Testimonial Processor",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Submission Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Testimonial Processor": {
+      "main": [
+        [
+          {
+            "node": "Parse Processed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Processed": {
+      "main": [
+        [
+          {
+            "node": "Save Testimonial",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Testimonial": {
+      "main": [
+        [
+          {
+            "node": "Notify Marketing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Marketing": {
+      "main": [
+        [
+          {
+            "node": "Return Processed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    "marketing",
+    "testimonials",
+    "social-proof",
+    "crm"
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-08T11:00:00.000Z",
+  "versionId": "v1.0.0"
+}

@@ -1,0 +1,312 @@
+{
+  "name": "Press Release Drafting Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "draft-press-release",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "e2h5k8n1-0001",
+      "name": "Webhook \u2013 Submit Brief",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['company_name', 'announcement_type', 'headline_idea', 'key_facts'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nif (!Array.isArray(body.key_facts) || body.key_facts.length < 2) return [{ json: { valid: false, error: 'key_facts must be an array with at least 2 items' } }];\nconst announcementTypes = ['product_launch', 'funding', 'partnership', 'acquisition', 'executive_hire', 'award', 'expansion', 'event', 'research', 'other'];\nconst announcementType = announcementTypes.includes(body.announcement_type) ? body.announcement_type : 'other';\nreturn [{ json: {\n  valid: true,\n  companyName: body.company_name.trim(),\n  companyDescription: (body.company_description || '').slice(0, 400),\n  announcementType,\n  headlineIdea: body.headline_idea.trim(),\n  keyFacts: body.key_facts.slice(0, 10),\n  quotes: Array.isArray(body.quotes) ? body.quotes.slice(0, 3) : [],\n  targetMedia: body.target_media || 'general business press',\n  tone: body.tone || 'professional',\n  embargo: body.embargo || '',\n  contactName: body.contact_name || '',\n  contactEmail: body.contact_email || '',\n  contactPhone: body.contact_phone || '',\n  boilerplate: (body.boilerplate || '').slice(0, 400),\n  replyEmail: body.reply_email || null,\n  requestedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "e2h5k8n1-0002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cv",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "e2h5k8n1-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "e2h5k8n1-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.6,
+          "maxTokens": 2500
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are an experienced PR writer who has drafted press releases for startups and enterprises. You write in proper AP Style press release format.\n\nPress release structure:\n- FOR IMMEDIATE RELEASE (or embargo date)\n- Dateline: City, Date --\n- Headline: Active voice, present tense, newsworthy hook\n- Subheadline: One line expanding on the headline\n- Lede paragraph: Who, what, when, where, why in first 35 words\n- Body: 2-3 supporting paragraphs with context and details\n- Quote block: Executive quote with attribution\n- Second quote (if provided): Partner or customer quote\n- Company boilerplate: Standard About paragraph\n- Media contact info\n- ### (end mark)\n\nYou write headlines that editors actually want to run. You don't use jargon. You don't bury the news. You write the lede as if it's the only sentence a journalist will read.\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Draft a press release.\n\nCompany: {{ $json.companyName }}\nCompany description: {{ $json.companyDescription || 'not provided' }}\nAnnouncement type: {{ $json.announcementType }}\nHeadline idea (refine this): {{ $json.headlineIdea }}\nTone: {{ $json.tone }}\nTarget media: {{ $json.targetMedia }}\nEmbargo: {{ $json.embargo || 'FOR IMMEDIATE RELEASE' }}\n\nKey facts to include:\n{{ $json.keyFacts.map((f, i) => `${i+1}. ${f}`).join('\\n') }}\n\nQuotes provided:\n{{ $json.quotes.map((q, i) => `Quote ${i+1}: \"${q.quote}\" \u2014 ${q.attribution || 'unattributed'}`).join('\\n') || 'None provided \u2014 create a placeholder quote' }}\n\nContact info:\n{{ $json.contactName || '[Contact Name]' }} | {{ $json.contactEmail || '[email]' }} | {{ $json.contactPhone || '[phone]' }}\n\nBoilerplate: {{ $json.boilerplate || 'Generate a standard boilerplate based on the company description.' }}\n\nReturn this JSON:\n{\n  \"headline\": \"final polished headline\",\n  \"subheadline\": \"one-line subheadline\",\n  \"release_date_line\": \"FOR IMMEDIATE RELEASE or embargo text\",\n  \"dateline\": \"City, Date --\",\n  \"body\": \"full press release body text from lede through boilerplate and ### \u2014 formatted as one string with paragraph breaks using \\\\n\\\\n\",\n  \"headline_alternatives\": [\"2 alternative headline options\"],\n  \"editor_notes\": [\"2-3 notes for the PR team: what's strong, what to verify, suggested media targets\"]\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "e2h5k8n1-0005",
+      "name": "Claude PR Writer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        860,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet draft;\ntry { draft = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst input = $('Validate Input').first().json;\ndraft._meta = { companyName: input.companyName, announcementType: input.announcementType, replyEmail: input.replyEmail };\nreturn [{ json: draft }];"
+      },
+      "id": "e2h5k8n1-0006",
+      "name": "Parse Draft",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nconst m = d._meta;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nconst bodyHtml = esc(d.body||'').replace(/\\n\\n/g,'</p><p style=\"margin:0 0 14px;font-size:15px;line-height:1.75\">').replace(/\\n/g,'<br>');\nconst altHeads = (d.headline_alternatives||[]).map((h,i)=>`<div style=\"font-size:14px;padding:7px 0;border-bottom:1px solid #f3f4f6;color:#374151\">${i+1}. ${esc(h)}</div>`).join('');\nconst editorNotes = (d.editor_notes||[]).map(n=>`<li style=\"font-size:13px;margin-bottom:6px;line-height:1.55;color:#374151\">${esc(n)}</li>`).join('');\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f9fafb;font-family:Georgia,'Times New Roman',serif;color:#1a1a1a\">\n<div style=\"max-width:700px;margin:0 auto\">\n  <div style=\"background:#1a1a1a;color:#fff;padding:20px 28px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#6b7280;margin-bottom:5px\">Press Release \u00b7 ${esc(m.announcementType.replace(/_/g,' '))}</div>\n    <div style=\"font-size:20px;font-weight:700;line-height:1.3\">${esc(d.headline)}</div>\n    <div style=\"font-size:14px;color:#9ca3af;margin-top:6px;font-style:italic\">${esc(d.subheadline)}</div>\n  </div>\n  <div style=\"background:#fff;padding:24px 28px;border:1px solid #e5e7eb;border-top:none;font-family:Georgia,serif\">\n    <div style=\"font-size:12px;font-weight:700;color:#6b7280;margin-bottom:4px\">${esc(d.release_date_line)}</div>\n    <div style=\"font-size:12px;color:#6b7280;margin-bottom:20px\">${esc(d.dateline)}</div>\n    <p style=\"margin:0 0 14px;font-size:15px;line-height:1.75\">${bodyHtml}</p>\n  </div>\n  ${altHeads ? `<div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:8px\">Alternative headlines</div>\n    ${altHeads}\n  </div>` : ''}\n  ${editorNotes ? `<div style=\"background:#eff6ff;padding:16px 28px;border:1px solid #bfdbfe\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#1d4ed8;margin-bottom:8px\">PR team notes</div>\n    <ul style=\"padding-left:18px;margin:0\">${editorNotes}</ul>\n  </div>` : ''}\n  <div style=\"background:#1a1a1a;color:#4b5563;font-size:11px;padding:12px 28px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Press Release Drafter \u00b7 ${new Date().toLocaleDateString()}\n  </div>\n</div></body></html>`;\nreturn [{ json: { html, replyEmail: m.replyEmail, companyName: m.companyName, headline: d.headline, draft: d } }];"
+      },
+      "id": "e2h5k8n1-0007",
+      "name": "Build Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "ce",
+              "leftValue": "={{ $json.replyEmail }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "e2h5k8n1-0008",
+      "name": "Has Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.replyEmail}}",
+        "subject": "Press release draft: {{ $json.headline }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "e2h5k8n1-0009",
+      "name": "Email Draft",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1740,
+        180
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'drafted', headline: $json.headline, emailed: $json.replyEmail ? true : false, draft: $json.draft } }}"
+      },
+      "id": "e2h5k8n1-0010",
+      "name": "Return Draft",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1960,
+        240
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook \u2013 Submit Brief": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Claude PR Writer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude PR Writer": {
+      "main": [
+        [
+          {
+            "node": "Parse Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Draft": {
+      "main": [
+        [
+          {
+            "node": "Build Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Output": {
+      "main": [
+        [
+          {
+            "node": "Has Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Email?": {
+      "main": [
+        [
+          {
+            "node": "Email Draft",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Draft": {
+      "main": [
+        [
+          {
+            "node": "Return Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    "pr",
+    "communications",
+    "writing",
+    "marketing"
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-08T09:00:00.000Z",
+  "versionId": "v1.0.0"
+}
