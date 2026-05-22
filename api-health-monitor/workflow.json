@@ -1,0 +1,26 @@
+{
+  "name": "FLOOWBOX - API Health Monitor",
+  "nodes": [
+    { "id": "a1b2c3d4-0001-4000-8000-000000000001", "name": "Every 5 Minutes", "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.2, "position": [250, 300], "parameters": { "rule": { "interval": [{"field": "minutes", "minutesInterval": 5}] } } },
+    { "id": "a1b2c3d4-0002-4000-8000-000000000002", "name": "Set Endpoints", "type": "n8n-nodes-base.set", "typeVersion": 3.4, "position": [500, 300], "parameters": { "assignments": { "assignments": [{"id":"e1","name":"endpoints","type":"array","value":"=[{\"name\":\"FLOOWBOX API\",\"url\":\"https://api.floowbox.com/health\",\"expected_status\":200},{\"name\":\"Webhooks\",\"url\":\"https://hooks.floowbox.com/ping\",\"expected_status\":200}]"}] } } },
+    { "id": "a1b2c3d4-0003-4000-8000-000000000003", "name": "Split Endpoints", "type": "n8n-nodes-base.splitOut", "typeVersion": 1, "position": [750, 300], "parameters": { "fieldToSplitOut": "endpoints" } },
+    { "id": "a1b2c3d4-0004-4000-8000-000000000004", "name": "Ping Endpoint", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [1000, 300], "parameters": { "url": "={{ $json.url }}", "options": { "timeout": 5000, "response": { "response": { "fullResponse": true } } } } },
+    { "id": "a1b2c3d4-0005-4000-8000-000000000005", "name": "Evaluate Status", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1250, 300], "parameters": { "jsCode": "const ep = $('Split Endpoints').item.json;\nconst res = $input.item.json;\nconst healthy = (res.statusCode||0) === ep.expected_status;\nreturn [{ json: { name: ep.name, url: ep.url, status: res.statusCode||0, healthy, checked_at: new Date().toISOString() } }];" } },
+    { "id": "a1b2c3d4-0006-4000-8000-000000000006", "name": "Filter Down", "type": "n8n-nodes-base.filter", "typeVersion": 2.2, "position": [1500, 300], "parameters": { "conditions": { "conditions": [{"leftValue": "={{ $json.healthy }}", "rightValue": false, "operator": {"type": "boolean", "operation": "equal"}}] } } },
+    { "id": "a1b2c3d4-0007-4000-8000-000000000007", "name": "Alert Slack", "type": "n8n-nodes-base.slack", "typeVersion": 2.2, "position": [1750, 300], "parameters": { "operation": "post", "channel": "#alerts", "text": "=🚨 *DOWN: {{ $json.name }}* | Status: {{ $json.status }} | Time: {{ $json.checked_at }}" } }
+  ],
+  "connections": {
+    "Every 5 Minutes": {"main": [[{"node": "Set Endpoints", "type": "main", "index": 0}]]},
+    "Set Endpoints": {"main": [[{"node": "Split Endpoints", "type": "main", "index": 0}]]},
+    "Split Endpoints": {"main": [[{"node": "Ping Endpoint", "type": "main", "index": 0}]]},
+    "Ping Endpoint": {"main": [[{"node": "Evaluate Status", "type": "main", "index": 0}]]},
+    "Evaluate Status": {"main": [[{"node": "Filter Down", "type": "main", "index": 0}]]},
+    "Filter Down": {"main": [[{"node": "Alert Slack", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "id": "a1b2c3d4-0000-4000-8000-000000000036",
+  "versionId": "a1b2c3d4-0000-4000-8000-000000000136",
+  "meta": { "templateCredsSetupCompleted": true },
+  "tags": []
+}
