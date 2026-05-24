@@ -1,0 +1,383 @@
+{
+  "name": "Travel Itinerary Builder Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "build-itinerary",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "j7m1p4s6-0001",
+      "name": "Webhook \u2013 Build Itinerary",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['destination', 'arrival_date', 'departure_date', 'travel_style'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nconst arrival = new Date(body.arrival_date);\nconst departure = new Date(body.departure_date);\nif (isNaN(arrival) || isNaN(departure)) return [{ json: { valid: false, error: 'Invalid date format \u2014 use YYYY-MM-DD' } }];\nconst nights = Math.round((departure - arrival) / 86400000);\nif (nights < 1 || nights > 21) return [{ json: { valid: false, error: 'Trip must be 1-21 nights' } }];\nconst validStyles = ['budget', 'mid_range', 'luxury', 'backpacker', 'family', 'romantic', 'adventure', 'cultural', 'foodie', 'slow_travel'];\nconst style = validStyles.includes(body.travel_style) ? body.travel_style : 'mid_range';\nreturn [{ json: {\n  valid: true,\n  destination: body.destination.trim(),\n  arrivalDate: body.arrival_date,\n  departureDate: body.departure_date,\n  nights,\n  travelStyle: style,\n  travelers: parseInt(body.travelers) || 2,\n  budget: body.budget || '',\n  currency: body.currency || 'USD',\n  interests: Array.isArray(body.interests) ? body.interests : (body.interests || '').split(',').map(s => s.trim()).filter(Boolean),\n  dietaryNeeds: body.dietary_needs || '',\n  mobilityNeeds: body.mobility_needs || '',\n  mustSee: (body.must_see || '').slice(0, 400),\n  avoidList: (body.avoid || '').slice(0, 300),\n  accommodationBooked: body.accommodation_booked === true || body.accommodation_booked === 'true',\n  flightsBooked: body.flights_booked === true || body.flights_booked === 'true',\n  replyEmail: body.reply_email || null,\n  requestedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "j7m1p4s6-0002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cv",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "j7m1p4s6-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "j7m1p4s6-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.tavily.com/search",
+        "sendBody": true,
+        "specifyBody": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "api_key",
+              "value": "={{$env.TAVILY_API_KEY}}"
+            },
+            {
+              "name": "query",
+              "value": "={{ $json.destination }} travel tips {{ $json.travelStyle.replace('_',' ') }} {{ $json.arrivalDate.slice(0,7) }} what to do {{ $json.nights }} days"
+            },
+            {
+              "name": "search_depth",
+              "value": "basic"
+            },
+            {
+              "name": "max_results",
+              "value": 4
+            }
+          ]
+        }
+      },
+      "id": "j7m1p4s6-0005",
+      "name": "Research Destination",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        860,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const search = $('Research Destination').first().json;\nconst input = $('Validate Input').first().json;\nconst context = (search.results||[]).map(r => `${r.title}: ${(r.content||r.snippet||'').slice(0,350)}`).join('\\n\\n');\nreturn [{ json: { input, destinationContext: context || 'No additional context found.' } }];"
+      },
+      "id": "j7m1p4s6-0006",
+      "name": "Merge Research",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1060,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.72,
+          "maxTokens": 3500
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You build practical, opinionated travel itineraries. You know that the best itineraries don't try to pack in everything \u2014 they make smart choices about pacing and prioritize what's genuinely worth someone's time.\n\nYou write like a well-travelled friend who knows the destination: specific, honest about what's overrated, enthusiastic about what's genuinely special. You give practical logistics alongside the experience recommendations \u2014 how to get there, how long to allow, what time of day is best.\n\nYou pace the days sensibly. You don't schedule 8 things per day. You build in flexibility. You group activities geographically so people aren't wasting time in transit.\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Build a travel itinerary.\n\nDestination: {{ $json.input.destination }}\nDates: {{ $json.input.arrivalDate }} to {{ $json.input.departureDate }} ({{ $json.input.nights }} nights)\nTravelers: {{ $json.input.travelers }} people\nTravel style: {{ $json.input.travelStyle.replace('_',' ') }}\nBudget: {{ $json.input.budget || 'not specified' }} {{ $json.input.currency }}\nInterests: {{ $json.input.interests.join(', ') || 'not specified' }}\nDietary needs: {{ $json.input.dietaryNeeds || 'none' }}\nMobility considerations: {{ $json.input.mobilityNeeds || 'none' }}\nMust-see/do: {{ $json.input.mustSee || 'none specified' }}\nAvoid: {{ $json.input.avoidList || 'nothing specified' }}\nAccommodation booked: {{ $json.input.accommodationBooked }}\nFlights booked: {{ $json.input.flightsBooked }}\n\nDestination research context:\n{{ $json.destinationContext }}\n\nReturn this JSON:\n{\n  \"destination\": \"{{ $json.input.destination }}\",\n  \"trip_overview\": \"2-3 sentences on what makes this destination special for these travelers at this time of year \u2014 be specific\",\n  \"travel_tips\": [\"3-5 practical tips specific to this destination and travel style \u2014 things most guides don't emphasize enough\"],\n  \"days\": [\n    {\n      \"day\": 1,\n      \"date\": \"{{ $json.input.arrivalDate }}\",\n      \"theme\": \"short evocative theme for the day e.g. Arrival & Old City\",\n      \"morning\": { \"activity\": \"what to do\", \"location\": \"specific place name\", \"duration\": \"approx time\", \"tip\": \"practical insider tip\" },\n      \"afternoon\": { \"activity\": \"what to do\", \"location\": \"specific place name\", \"duration\": \"approx time\", \"tip\": \"practical tip\" },\n      \"evening\": { \"activity\": \"what to do\", \"location\": \"specific place/neighbourhood\", \"duration\": \"approx time\", \"tip\": \"practical tip\" },\n      \"meal_suggestions\": { \"breakfast\": \"specific cafe or style\", \"lunch\": \"specific restaurant or area\", \"dinner\": \"specific restaurant or neighbourhood\" },\n      \"logistics_note\": \"transport, booking requirements, best time to arrive \u2014 any logistical detail that makes the day flow\"\n    }\n  ],\n  \"accommodation_suggestion\": \"{{ $json.input.accommodationBooked ? 'Accommodation already booked \u2014 no suggestion needed' : 'specific neighbourhood and 1-2 property types or names suited to this travel style' }}\",\n  \"getting_around\": \"practical transport overview for this destination \u2014 what works, what to avoid, costs\",\n  \"budget_guide\": \"realistic daily spend estimate per person for this travel style \u2014 broken into accommodation/food/activities/transport\",\n  \"what_to_skip\": [\"1-3 overrated things at this destination that don't match this trip's style or value\"],\n  \"packing_note\": \"one specific packing consideration for this destination and dates that travelers often miss\"\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "j7m1p4s6-0007",
+      "name": "Claude Itinerary Builder",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        1280,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet itinerary;\ntry { itinerary = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst input = $('Validate Input').first().json;\nitinerary._meta = { nights: input.nights, travelers: input.travelers, travelStyle: input.travelStyle, arrivalDate: input.arrivalDate, departureDate: input.departureDate, replyEmail: input.replyEmail, currency: input.currency };\nreturn [{ json: itinerary }];"
+      },
+      "id": "j7m1p4s6-0008",
+      "name": "Parse Itinerary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const it = $input.first().json;\nconst m = it._meta;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst dayCards = (it.days||[]).map((d,i) => {\n  const slots = ['morning','afternoon','evening'].map(slot => {\n    const s = d[slot]; if (!s) return '';\n    return `<div style=\"margin-bottom:12px\">\n      <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:3px\">${slot}</div>\n      <div style=\"font-size:14px;font-weight:600\">${esc(s.activity)}</div>\n      <div style=\"font-size:13px;color:#6b7280\">${esc(s.location)} \u00b7 ${esc(s.duration)}</div>\n      <div style=\"font-size:13px;color:#2563eb;margin-top:3px\">\ud83d\udca1 ${esc(s.tip)}</div>\n    </div>`;\n  }).join('');\n  const meals = d.meal_suggestions ? `<div style=\"background:#f9fafb;border-radius:6px;padding:10px 14px;margin-top:12px;font-size:13px\">\n    <div style=\"font-weight:700;margin-bottom:5px;color:#374151\">\ud83c\udf7d Meals</div>\n    ${d.meal_suggestions.breakfast?`<div><strong>Breakfast:</strong> ${esc(d.meal_suggestions.breakfast)}</div>`:''}\n    ${d.meal_suggestions.lunch?`<div><strong>Lunch:</strong> ${esc(d.meal_suggestions.lunch)}</div>`:''}\n    ${d.meal_suggestions.dinner?`<div><strong>Dinner:</strong> ${esc(d.meal_suggestions.dinner)}</div>`:''}\n  </div>` : '';\n  const logistics = d.logistics_note ? `<div style=\"background:#eff6ff;border-radius:6px;padding:8px 14px;margin-top:10px;font-size:13px;color:#1d4ed8\">\ud83d\udccd ${esc(d.logistics_note)}</div>` : '';\n  return `<div style=\"border:1px solid #e5e7eb;border-radius:8px;margin-bottom:16px;overflow:hidden\">\n    <div style=\"background:#1e293b;color:#fff;padding:10px 18px;display:flex;justify-content:space-between;align-items:center\">\n      <div><span style=\"font-size:12px;font-weight:700;color:#94a3b8\">Day ${d.day}</span> <span style=\"font-size:14px;font-weight:700;margin-left:8px\">${esc(d.theme)}</span></div>\n      <span style=\"font-size:12px;color:#64748b\">${esc(d.date||'')}</span>\n    </div>\n    <div style=\"padding:16px 18px\">${slots}${meals}${logistics}</div>\n  </div>`;\n}).join('');\n\nconst tipsList = (it.travel_tips||[]).map(t=>`<li style=\"font-size:14px;margin-bottom:8px;line-height:1.55;color:#374151\">${esc(t)}</li>`).join('');\nconst skipList = (it.what_to_skip||[]).map(s=>`<div style=\"font-size:13px;color:#6b7280;padding:5px 0;border-bottom:1px solid #f3f4f6\">\u2717 ${esc(s)}</div>`).join('');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f5f0ea;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#1a1a1a\">\n<div style=\"max-width:680px;margin:0 auto\">\n  <div style=\"background:#1a3a2a;color:#fff;padding:22px 28px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#6db38a;margin-bottom:5px\">${m.nights}-night itinerary \u00b7 ${esc(m.travelStyle.replace(/_/g,' '))} \u00b7 ${m.travelers} traveler${m.travelers>1?'s':''}</div>\n    <div style=\"font-size:22px;font-weight:700\">${esc(it.destination)}</div>\n    <div style=\"font-size:13px;color:#6db38a;margin-top:4px\">${esc(m.arrivalDate)} \u2192 ${esc(m.departureDate)}</div>\n  </div>\n  <div style=\"background:#fff;padding:18px 28px;border:1px solid #e5e7eb;border-top:none\">\n    <p style=\"font-size:15px;line-height:1.75;color:#374151;margin:0\">${esc(it.trip_overview)}</p>\n  </div>\n  <div style=\"background:#fff;padding:18px 28px;border:1px solid #e5e7eb;border-top:3px solid #f0ede8\">\n    ${dayCards}\n  </div>\n  ${tipsList ? `<div style=\"background:#fff;padding:18px 28px;border:1px solid #e5e7eb;border-top:3px solid #f0ede8\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:10px\">Travel tips</div>\n    <ul style=\"padding-left:18px;margin:0\">${tipsList}</ul>\n  </div>` : ''}\n  <div style=\"background:#fff;padding:18px 28px;border:1px solid #e5e7eb;border-top:3px solid #f0ede8\">\n    <div style=\"display:grid;grid-template-columns:1fr 1fr;gap:20px\">\n      <div>\n        <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:6px\">Getting around</div>\n        <div style=\"font-size:14px;color:#374151;line-height:1.6\">${esc(it.getting_around)}</div>\n      </div>\n      <div>\n        <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:6px\">Budget guide</div>\n        <div style=\"font-size:14px;color:#374151;line-height:1.6\">${esc(it.budget_guide)}</div>\n      </div>\n    </div>\n  </div>\n  ${it.accommodation_suggestion && !it.accommodation_suggestion.includes('already booked') ? `<div style=\"background:#fff;padding:14px 28px;border:1px solid #e5e7eb;border-top:3px solid #f0ede8\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:6px\">Where to stay</div>\n    <div style=\"font-size:14px;color:#374151;line-height:1.6\">${esc(it.accommodation_suggestion)}</div>\n  </div>` : ''}\n  ${skipList ? `<div style=\"background:#fef9f0;padding:14px 28px;border:1px solid #fde8c0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#92400e;margin-bottom:7px\">Worth skipping</div>\n    ${skipList}\n  </div>` : ''}\n  ${it.packing_note ? `<div style=\"background:#f0fdf4;padding:12px 28px;border:1px solid #bbf7d0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#15803d;margin-bottom:5px\">Pack this</div>\n    <div style=\"font-size:14px;color:#166534;line-height:1.6\">${esc(it.packing_note)}</div>\n  </div>` : ''}\n  <div style=\"background:#1a3a2a;color:#4a7a5a;font-size:11px;padding:12px 28px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Travel Itinerary Builder \u00b7 ${esc(it.destination)} \u00b7 ${new Date().toLocaleDateString()}\n  </div>\n</div></body></html>`;\n\nreturn [{ json: { html, replyEmail: m.replyEmail, destination: it.destination, nights: m.nights, itinerary: it } }];"
+      },
+      "id": "j7m1p4s6-0009",
+      "name": "Build Itinerary Doc",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1720,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "ce",
+              "leftValue": "={{ $json.replyEmail }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "j7m1p4s6-0010",
+      "name": "Has Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1940,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.replyEmail}}",
+        "subject": "Your {{ $json.nights }}-night itinerary: {{ $json.destination }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "j7m1p4s6-0011",
+      "name": "Email Itinerary",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2160,
+        260
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'built', destination: $json.destination, nights: $json.nights, emailed: $json.replyEmail ? true : false, itinerary: $json.itinerary } }}"
+      },
+      "id": "j7m1p4s6-0012",
+      "name": "Return Itinerary",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2380,
+        320
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook \u2013 Build Itinerary": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Research Destination",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Research Destination": {
+      "main": [
+        [
+          {
+            "node": "Merge Research",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Research": {
+      "main": [
+        [
+          {
+            "node": "Claude Itinerary Builder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Itinerary Builder": {
+      "main": [
+        [
+          {
+            "node": "Parse Itinerary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Itinerary": {
+      "main": [
+        [
+          {
+            "node": "Build Itinerary Doc",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Itinerary Doc": {
+      "main": [
+        [
+          {
+            "node": "Has Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Email?": {
+      "main": [
+        [
+          {
+            "node": "Email Itinerary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Itinerary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Itinerary": {
+      "main": [
+        [
+          {
+            "node": "Return Itinerary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    "travel",
+    "planning",
+    "lifestyle",
+    "personal"
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-09T11:00:00.000Z",
+  "versionId": "v1.0.0"
+}

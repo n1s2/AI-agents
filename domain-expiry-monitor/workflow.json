@@ -1,0 +1,406 @@
+{
+  "name": "Domain Expiry Monitor",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 7,
+              "triggerAtMinute": 30
+            }
+          ]
+        }
+      },
+      "id": "i6l9o3r5-0001",
+      "name": "Daily 7:30am Check",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        200,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "add-domain",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "i6l9o3r5-0002",
+      "name": "Webhook \u2013 Add Domain",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.DOMAINS_SHEET_ID}}",
+        "sheetName": "Domains",
+        "options": {}
+      },
+      "id": "i6l9o3r5-0003",
+      "name": "Load Domain List",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        420,
+        280
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const domains = $input.all().map(r => r.json).filter(r => r.domain);\nconst today = new Date();\ntoday.setHours(0,0,0,0);\nconst results = [];\n\nfor (const row of domains) {\n  const domain = row.domain.trim().toLowerCase();\n  const expiryDate = row.expiry_date ? new Date(row.expiry_date) : null;\n  const autoRenew = row.auto_renew === 'TRUE' || row.auto_renew === true;\n  const registrar = row.registrar || '';\n  const owner = row.owner || '';\n  const notes = row.notes || '';\n  const alertSentDays = row.last_alert_days ? parseInt(row.last_alert_days) : null;\n\n  if (!expiryDate || isNaN(expiryDate)) {\n    results.push({ domain, status: 'unknown_expiry', registrar, owner, notes, autoRenew });\n    continue;\n  }\n\n  const daysUntilExpiry = Math.floor((expiryDate - today) / 86400000);\n  let urgency = 'ok';\n  if (daysUntilExpiry < 0) urgency = 'expired';\n  else if (daysUntilExpiry <= 7) urgency = 'critical';\n  else if (daysUntilExpiry <= 30) urgency = 'urgent';\n  else if (daysUntilExpiry <= 60) urgency = 'warning';\n  else if (daysUntilExpiry <= 90) urgency = 'notice';\n\n  const shouldAlert = ['expired','critical','urgent'].includes(urgency) ||\n    (urgency === 'warning' && alertSentDays !== 30) ||\n    (urgency === 'notice' && alertSentDays !== 60);\n\n  if (urgency !== 'ok' || shouldAlert) {\n    results.push({ domain, expiryDate: expiryDate.toISOString().split('T')[0], daysUntilExpiry, urgency, autoRenew, registrar, owner, notes, shouldAlert });\n  }\n}\n\nresults.sort((a,b) => (a.daysUntilExpiry||999) - (b.daysUntilExpiry||999));\nconst critical = results.filter(d => ['expired','critical'].includes(d.urgency));\nconst needsAction = results.filter(d => !d.autoRenew && d.urgency !== 'ok');\n\nreturn [{ json: { domains: results, critical, needsAction, totalMonitored: domains.length, scanDate: today.toISOString().split('T')[0] } }];"
+      },
+      "id": "i6l9o3r5-0004",
+      "name": "Check Expiry Dates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "ca",
+              "leftValue": "={{ $json.domains.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "i6l9o3r5-0005",
+      "name": "Any Alerts?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        860,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.3,
+          "maxTokens": 500
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You write concise domain expiry alert summaries for technical teams. You prioritize by urgency and flag the business risk clearly. You distinguish between auto-renewing domains (lower risk) and manual-renewal domains (action required). Under 150 words.",
+              "role": "system"
+            },
+            {
+              "content": "Summarize today's domain monitoring report.\n\nDate: {{ $json.scanDate }}\nTotal domains monitored: {{ $json.totalMonitored }}\nDomains with alerts: {{ $json.domains.length }}\n\nCritical / expired ({{ $json.critical.length }}):\n{{ $json.critical.map(d => `- ${d.domain}: ${d.daysUntilExpiry < 0 ? 'EXPIRED ' + Math.abs(d.daysUntilExpiry) + ' days ago' : d.daysUntilExpiry + ' days left'}${d.autoRenew ? ' (auto-renew ON)' : ' \u26a0 MANUAL RENEWAL'}`).join('\\n') || 'none' }}\n\nNeeding manual action (no auto-renew):\n{{ $json.needsAction.map(d => `- ${d.domain}: ${d.daysUntilExpiry} days, registrar: ${d.registrar||'unknown'}`).join('\\n') || 'none' }}\n\nAll alerts:\n{{ $json.domains.map(d => `${d.domain}: ${d.daysUntilExpiry !== undefined ? d.daysUntilExpiry + 'd' : 'unknown expiry'} (${d.urgency})${d.autoRenew ? ' auto' : ''}`).join(', ') }}\n\nWhat needs action today and why.",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "i6l9o3r5-0006",
+      "name": "Claude Domain Analyst",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        1060,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const note = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nconst d = $('Check Expiry Dates').first().json;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst urgencyConfig = {\n  expired:  {color:'#dc2626', bg:'#fef2f2', label:'EXPIRED'},\n  critical: {color:'#ea580c', bg:'#fff7ed', label:'CRITICAL'},\n  urgent:   {color:'#d97706', bg:'#fffbeb', label:'URGENT'},\n  warning:  {color:'#2563eb', bg:'#eff6ff', label:'WARNING'},\n  notice:   {color:'#6b7280', bg:'#f9fafb', label:'NOTICE'},\n  unknown_expiry: {color:'#9ca3af', bg:'#f3f4f6', label:'UNKNOWN'}\n};\n\nconst rows = d.domains.map(dom => {\n  const uc = urgencyConfig[dom.urgency] || urgencyConfig.notice;\n  return `<tr style=\"border-bottom:1px solid #f3f4f6\">\n    <td style=\"padding:9px 12px;font-size:14px;font-weight:600;font-family:monospace\">${esc(dom.domain)}</td>\n    <td style=\"padding:9px 12px;text-align:center\"><span style=\"background:${uc.bg};color:${uc.color};font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px\">${uc.label}</span></td>\n    <td style=\"padding:9px 12px;text-align:right;font-size:13px;color:${dom.daysUntilExpiry < 0 ? '#dc2626' : dom.daysUntilExpiry <= 7 ? '#ea580c' : '#374151'};font-weight:600\">${dom.daysUntilExpiry !== undefined ? (dom.daysUntilExpiry < 0 ? Math.abs(dom.daysUntilExpiry)+'d ago' : dom.daysUntilExpiry+'d') : '\u2014'}</td>\n    <td style=\"padding:9px 12px;font-size:12px;color:#6b7280\">${esc(dom.expiryDate||'unknown')}</td>\n    <td style=\"padding:9px 12px;text-align:center;font-size:13px\">${dom.autoRenew ? '\u2713 auto' : '<span style=\"color:#dc2626;font-weight:600\">manual</span>'}</td>\n    <td style=\"padding:9px 12px;font-size:12px;color:#9ca3af\">${esc(dom.registrar||'')}</td>\n    <td style=\"padding:9px 12px;font-size:12px;color:#9ca3af\">${esc(dom.owner||'')}</td>\n  </tr>`;\n}).join('');\n\nconst noteHtml = note.replace(/\\*\\*(.+?)\\*\\*/g,'<strong>$1</strong>').replace(/\\n/g,'<br>');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head>\n<body style=\"margin:0;padding:16px;background:#f9fafb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111\">\n<div style=\"max-width:780px;margin:0 auto\">\n  <div style=\"background:#111827;color:#fff;padding:18px 26px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#6b7280;margin-bottom:4px\">Domain Expiry Monitor \u00b7 ${esc(d.scanDate)}</div>\n    <div style=\"font-size:18px;font-weight:700\">${d.domains.length} domains need attention \u00b7 ${d.critical.length} critical \u00b7 ${d.totalMonitored} monitored</div>\n  </div>\n  <div style=\"background:#fff;padding:16px 26px;border:1px solid #e5e7eb;border-top:none\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:7px\">Summary</div>\n    <p style=\"font-size:14px;line-height:1.75;color:#374151;margin:0\">${noteHtml}</p>\n  </div>\n  <div style=\"background:#fff;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <table style=\"width:100%;border-collapse:collapse\">\n      <thead><tr style=\"background:#f9fafb;font-size:11px;text-transform:uppercase;color:#9ca3af\">\n        <th style=\"padding:8px 12px;text-align:left\">Domain</th>\n        <th style=\"padding:8px 12px;text-align:center\">Status</th>\n        <th style=\"padding:8px 12px;text-align:right\">Expires in</th>\n        <th style=\"padding:8px 12px;text-align:left\">Expiry date</th>\n        <th style=\"padding:8px 12px;text-align:center\">Renewal</th>\n        <th style=\"padding:8px 12px;text-align:left\">Registrar</th>\n        <th style=\"padding:8px 12px;text-align:left\">Owner</th>\n      </tr></thead>\n      <tbody>${rows}</tbody>\n    </table>\n  </div>\n  <div style=\"background:#111827;color:#4b5563;font-size:11px;padding:10px 26px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Domain Expiry Monitor \u00b7 ${esc(d.scanDate)} \u00b7 ${d.totalMonitored} domains tracked\n  </div>\n</div></body></html>`;\n\nreturn [{ json: { html, critical: d.critical.length, totalAlerts: d.domains.length, needsAction: d.needsAction.length } }];"
+      },
+      "id": "i6l9o3r5-0007",
+      "name": "Build Alert Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$env.TECH_EMAIL}}",
+        "subject": "Domain expiry: {{ $json.critical }} critical \u00b7 {{ $json.needsAction }} need manual renewal \u00b7 {{ new Date().toISOString().split('T')[0] }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "i6l9o3r5-0008",
+      "name": "Send Alert",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1500,
+        200
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nif (!body.domain) return [{ json: { valid: false, error: 'Missing domain' } }];\nconst domain = body.domain.trim().toLowerCase().replace(/^https?:\\/\\//,'').replace(/\\/.*/,'');\nreturn [{ json: {\n  valid: true, domain,\n  expiryDate: body.expiry_date || '',\n  autoRenew: body.auto_renew === true || body.auto_renew === 'true',\n  registrar: body.registrar || '',\n  owner: body.owner || '',\n  notes: (body.notes||'').slice(0,300),\n  addedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "i6l9o3r5-0009",
+      "name": "Validate Domain",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cdv",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "i6l9o3r5-0010",
+      "name": "Domain Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.DOMAINS_SHEET_ID}}",
+        "sheetName": "Domains",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "domain": "={{ $json.domain }}",
+            "expiry_date": "={{ $json.expiryDate }}",
+            "auto_renew": "={{ $json.autoRenew }}",
+            "registrar": "={{ $json.registrar }}",
+            "owner": "={{ $json.owner }}",
+            "notes": "={{ $json.notes }}",
+            "added_at": "={{ $json.addedAt }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "i6l9o3r5-0011",
+      "name": "Add to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        860,
+        500
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'added', domain: $json.domain, expiry_date: $json.expiryDate } }}"
+      },
+      "id": "i6l9o3r5-0012",
+      "name": "Return Added",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1080,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "i6l9o3r5-0013",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        620
+      ]
+    }
+  ],
+  "connections": {
+    "Daily 7:30am Check": {
+      "main": [
+        [
+          {
+            "node": "Load Domain List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Domain List": {
+      "main": [
+        [
+          {
+            "node": "Check Expiry Dates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Expiry Dates": {
+      "main": [
+        [
+          {
+            "node": "Any Alerts?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Alerts?": {
+      "main": [
+        [
+          {
+            "node": "Claude Domain Analyst",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Claude Domain Analyst": {
+      "main": [
+        [
+          {
+            "node": "Build Alert Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Alert Email": {
+      "main": [
+        [
+          {
+            "node": "Send Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook \u2013 Add Domain": {
+      "main": [
+        [
+          {
+            "node": "Validate Domain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Domain": {
+      "main": [
+        [
+          {
+            "node": "Domain Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Domain Valid?": {
+      "main": [
+        [
+          {
+            "node": "Add to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add to Sheet": {
+      "main": [
+        [
+          {
+            "node": "Return Added",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    "infrastructure",
+    "domains",
+    "devops",
+    "monitoring"
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2025-05-09T10:00:00.000Z",
+  "versionId": "v1.0.0"
+}

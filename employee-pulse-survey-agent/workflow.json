@@ -1,0 +1,544 @@
+{
+  "name": "Employee Pulse Survey Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "weeksInterval": 2,
+              "triggerAtDay": [
+                1
+              ],
+              "triggerAtHour": 9,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "h5k8n2q4-0001",
+      "name": "Bi-Weekly Monday 9am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        200,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "pulse-response",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "h5k8n2q4-0002",
+      "name": "Webhook \u2013 Submit Response",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.PULSE_SHEET_ID}}",
+        "sheetName": "Team",
+        "options": {}
+      },
+      "id": "h5k8n2q4-0003",
+      "name": "Load Team List",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        420,
+        240
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 600
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You write short, genuinely thoughtful bi-weekly pulse survey emails for small teams. The goal is to make people feel heard, not surveyed. The questions should feel like they come from a manager who actually cares.\n\nWrite 3 questions max. One should always be a numeric scale (1-5). One should be open-ended. Vary the questions each time \u2014 don't always ask the same things. Topics to rotate: energy levels, clarity of priorities, feeling of progress, team collaboration, personal growth, work-life balance, obstacles, appreciation.\n\nThe tone is warm and direct. No corporate speak. Write the email body only \u2014 no subject line.",
+              "role": "system"
+            },
+            {
+              "content": "Write a bi-weekly pulse survey email for a team.\n\nDate: {{ $now.toFormat('MMMM d, yyyy') }}\nTeam size: {{ $input.all().length }} people\nSurvey number hint: use a slightly different focus than last time\n\nThe email should:\n- Open with a brief genuine check-in sentence (1 line)\n- Present 3 questions clearly numbered\n- Include the response link: {{ $env.PULSE_FORM_URL || 'https://your-form-url.com/pulse' }}\n- Close warmly, reminding them it takes 2 minutes and responses are private\n\nWrite the email now.",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "h5k8n2q4-0004",
+      "name": "Claude Survey Writer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        640,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const emailBody = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nconst teamMembers = $('Load Team List').all().map(r => r.json).filter(r => r.email && r.name);\nconst surveyDate = new Date().toISOString().split('T')[0];\nreturn [{ json: { emailBody, teamMembers, surveyDate, surveyId: `PS-${Date.now()}` } }];"
+      },
+      "id": "h5k8n2q4-0005",
+      "name": "Prep Send",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        860,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "items": {
+          "values": [
+            {
+              "fieldToSplitBy": "teamMembers"
+            }
+          ]
+        }
+      },
+      "id": "h5k8n2q4-0006",
+      "name": "Split by Member",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1060,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{ $json.teamMembers[0]?.email || $json.email }}",
+        "subject": "Quick check-in \u2014 2 minutes, bi-weekly pulse",
+        "emailType": "text",
+        "message": "={{ $('Prep Send').first().json.emailBody }}"
+      },
+      "id": "h5k8n2q4-0007",
+      "name": "Send to Each Member",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1280,
+        240
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.PULSE_SHEET_ID}}",
+        "sheetName": "Survey Log",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "survey_id": "={{ $('Prep Send').first().json.surveyId }}",
+            "survey_date": "={{ $('Prep Send').first().json.surveyDate }}",
+            "recipients": "={{ $('Prep Send').first().json.teamMembers.length }}",
+            "sent_at": "={{ $now.toISO() }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "h5k8n2q4-0008",
+      "name": "Log Survey Send",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        1280,
+        380
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['respondent_name', 'energy_score'];\nconst missing = required.filter(f => body[f] === undefined || body[f] === null);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nconst energy = parseInt(body.energy_score);\nif (isNaN(energy) || energy < 1 || energy > 5) return [{ json: { valid: false, error: 'energy_score must be 1-5' } }];\nreturn [{ json: {\n  valid: true,\n  surveyId: body.survey_id || '',\n  respondentName: body.respondent_name.trim(),\n  respondentEmail: body.respondent_email || '',\n  energyScore: energy,\n  openResponse1: (body.open_response_1 || '').slice(0, 600),\n  openResponse2: (body.open_response_2 || '').slice(0, 600),\n  additionalScore: body.additional_score ? parseInt(body.additional_score) : null,\n  submittedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "h5k8n2q4-0009",
+      "name": "Validate Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cv",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "h5k8n2q4-0010",
+      "name": "Response Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "h5k8n2q4-0011",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.PULSE_SHEET_ID}}",
+        "sheetName": "Responses",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "submitted_at": "={{ $json.submittedAt }}",
+            "survey_id": "={{ $json.surveyId }}",
+            "respondent_name": "={{ $json.respondentName }}",
+            "energy_score": "={{ $json.energyScore }}",
+            "open_response_1": "={{ $json.openResponse1 }}",
+            "open_response_2": "={{ $json.openResponse2 }}",
+            "additional_score": "={{ $json.additionalScore }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "h5k8n2q4-0012",
+      "name": "Save Response",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        860,
+        480
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.PULSE_SHEET_ID}}",
+        "sheetName": "Responses",
+        "options": {}
+      },
+      "id": "h5k8n2q4-0013",
+      "name": "Load All Responses",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        1060,
+        480
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const all = $input.all().map(r => r.json).filter(r => r.submitted_at);\nconst current = $('Validate Response').first().json;\nconst currentSurveyId = current.surveyId;\nconst thisSurvey = all.filter(r => !currentSurveyId || r.survey_id === currentSurveyId);\nconst last4Surveys = {};\nfor (const r of all) {\n  if (!last4Surveys[r.survey_id]) last4Surveys[r.survey_id] = [];\n  last4Surveys[r.survey_id].push(parseFloat(r.energy_score)||0);\n}\nconst surveyAvgs = Object.entries(last4Surveys)\n  .map(([id, scores]) => ({ id, avg: scores.reduce((a,b)=>a+b,0)/scores.length }))\n  .sort((a,b) => b.id.localeCompare(a.id))\n  .slice(0,4);\nconst thisAvg = thisSurvey.length ? (thisSurvey.reduce((s,r)=>s+(parseFloat(r.energy_score)||0),0)/thisSurvey.length).toFixed(1) : null;\nconst openResponses = thisSurvey.map(r => [r.open_response_1, r.open_response_2].filter(Boolean)).flat().filter(Boolean);\nreturn [{ json: { thisAvg, responseCount: thisSurvey.length, surveyAvgs, openResponses, lowEnergyCount: thisSurvey.filter(r=>parseFloat(r.energy_score)<=2).length } }];"
+      },
+      "id": "h5k8n2q4-0014",
+      "name": "Compute Pulse Stats",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.5,
+          "maxTokens": 600
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You analyze employee pulse survey responses for a manager. You synthesize open-ended responses to surface themes and concerns \u2014 anonymously and without attributing comments to individuals. You're direct about what the data suggests, including when something looks concerning. Under 200 words. Write plainly.",
+              "role": "system"
+            },
+            {
+              "content": "Analyze these pulse survey responses for the manager.\n\nNew response: energy score {{ $('Validate Response').first().json.energyScore }}/5\nResponses this survey so far: {{ $json.responseCount }}\nAverage energy score this survey: {{ $json.thisAvg || 'only 1 response so far' }}/5\nLow energy responses (1-2): {{ $json.lowEnergyCount }}\n\nTrend (last 4 surveys, avg energy):\n{{ $json.surveyAvgs.map(s => `${s.id}: ${s.avg.toFixed(1)}`).join(', ') || 'insufficient history' }}\n\nOpen responses collected this survey:\n{{ $json.openResponses.join(' | ') || 'none yet' }}\n\nGive: what the data shows about team health, any themes in the open responses, whether anything warrants the manager's attention this week. Keep all responses anonymous.",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "h5k8n2q4-0015",
+      "name": "Claude Pulse Analyst",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        1500,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$env.MANAGER_EMAIL}}",
+        "subject": "Pulse update: {{ $('Compute Pulse Stats').first().json.responseCount }} responses \u00b7 avg energy {{ $('Compute Pulse Stats').first().json.thisAvg }}/5{{ $('Compute Pulse Stats').first().json.lowEnergyCount > 0 ? ' \u00b7 ' + $('Compute Pulse Stats').first().json.lowEnergyCount + ' low energy' : '' }}",
+        "emailType": "text",
+        "message": "=Pulse Survey Update\n\nResponses: {{ $('Compute Pulse Stats').first().json.responseCount }} | Avg energy: {{ $('Compute Pulse Stats').first().json.thisAvg }}/5 | Low energy (1-2): {{ $('Compute Pulse Stats').first().json.lowEnergyCount }}\n\n{{ $input.first().json.text || $input.first().json.content?.[0]?.text }}\n\n---\nAll responses are anonymous. View full data in the sheet."
+      },
+      "id": "h5k8n2q4-0016",
+      "name": "Email Manager Update",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1720,
+        480
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'received', message: 'Thank you for your response. Your feedback is anonymous and helps the team.' } }}"
+      },
+      "id": "h5k8n2q4-0017",
+      "name": "Return Thank You",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1940,
+        480
+      ]
+    }
+  ],
+  "connections": {
+    "Bi-Weekly Monday 9am": {
+      "main": [
+        [
+          {
+            "node": "Load Team List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Team List": {
+      "main": [
+        [
+          {
+            "node": "Claude Survey Writer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Survey Writer": {
+      "main": [
+        [
+          {
+            "node": "Prep Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prep Send": {
+      "main": [
+        [
+          {
+            "node": "Split by Member",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Survey Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split by Member": {
+      "main": [
+        [
+          {
+            "node": "Send to Each Member",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook \u2013 Submit Response": {
+      "main": [
+        [
+          {
+            "node": "Validate Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Response": {
+      "main": [
+        [
+          {
+            "node": "Response Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Response Valid?": {
+      "main": [
+        [
+          {
+            "node": "Save Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Response": {
+      "main": [
+        [
+          {
+            "node": "Load All Responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load All Responses": {
+      "main": [
+        [
+          {
+            "node": "Compute Pulse Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Pulse Stats": {
+      "main": [
+        [
+          {
+            "node": "Claude Pulse Analyst",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Pulse Analyst": {
+      "main": [
+        [
+          {
+            "node": "Email Manager Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Manager Update": {
+      "main": [
+        [
+          {
+            "node": "Return Thank You",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    "hr",
+    "team",
+    "engagement",
+    "surveys"
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2025-05-09T09:00:00.000Z",
+  "versionId": "v1.0.0"
+}
