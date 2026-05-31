@@ -1,0 +1,383 @@
+{
+  "name": "Book Club Discussion Generator",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "book-club",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "l9o3r6u8-0001",
+      "name": "Webhook \u2013 Submit Book",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['book_title', 'author'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nconst levels = ['high_school', 'undergraduate', 'general_adult', 'literary', 'professional'];\nconst level = levels.includes(body.discussion_level) ? body.discussion_level : 'general_adult';\nreturn [{ json: {\n  valid: true,\n  bookTitle: body.book_title.trim(),\n  author: body.author.trim(),\n  genre: body.genre || '',\n  publicationYear: body.publication_year || '',\n  groupSize: parseInt(body.group_size) || 8,\n  meetingDuration: parseInt(body.meeting_duration_minutes) || 90,\n  discussionLevel: level,\n  hasReadBook: body.has_read_book !== false,\n  specificThemes: (body.specific_themes || '').slice(0, 400),\n  avoidSpoilers: body.avoid_spoilers === true || body.avoid_spoilers === 'true',\n  groupDescription: (body.group_description || '').slice(0, 300),\n  replyEmail: body.reply_email || null,\n  requestedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "l9o3r6u8-0002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cv",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "l9o3r6u8-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "l9o3r6u8-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.tavily.com/search",
+        "sendBody": true,
+        "specifyBody": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "api_key",
+              "value": "={{$env.TAVILY_API_KEY}}"
+            },
+            {
+              "name": "query",
+              "value": "={{ $json.bookTitle }} {{ $json.author }} themes analysis literary criticism"
+            },
+            {
+              "name": "search_depth",
+              "value": "basic"
+            },
+            {
+              "name": "max_results",
+              "value": 4
+            }
+          ]
+        }
+      },
+      "id": "l9o3r6u8-0005",
+      "name": "Research Book",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        860,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const search = $('Research Book').first().json;\nconst input = $('Validate Input').first().json;\nconst context = (search.results||[]).map(r => `${r.title}: ${(r.content||r.snippet||'').slice(0,350)}`).join('\\n\\n');\nreturn [{ json: { input, bookContext: context || 'Use your general knowledge.' } }];"
+      },
+      "id": "l9o3r6u8-0006",
+      "name": "Merge Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1060,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.68,
+          "maxTokens": 3000
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You design book club discussion guides that actually generate conversation. You've run book clubs yourself and you know the difference between questions that get one-word answers and questions that make people lean forward.\n\nGood book club questions:\n- Start with observation before moving to interpretation (what happened \u2192 what does it mean \u2192 what does it mean for us)\n- Connect the text to the readers' own lives without being prescriptive\n- Allow for genuine disagreement \u2014 the best questions don't have one right answer\n- Reward close reading without punishing people who read less carefully\n- Build on each other so the conversation has a natural arc\n\nYou calibrate the depth and vocabulary to the group's level. A general adult book club at a library needs different questions than a graduate literary seminar.\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Create a book club discussion guide.\n\nBook: {{ $json.input.bookTitle }} by {{ $json.input.author }}\nGenre: {{ $json.input.genre || 'not specified' }}\nPublication year: {{ $json.input.publicationYear || 'not specified' }}\nGroup size: {{ $json.input.groupSize }} people\nMeeting duration: {{ $json.input.meetingDuration }} minutes\nDiscussion level: {{ $json.input.discussionLevel.replace('_',' ') }}\nFacilitator has read the book: {{ $json.input.hasReadBook }}\nSpecific themes to explore: {{ $json.input.specificThemes || 'none specified' }}\nAvoid spoilers: {{ $json.input.avoidSpoilers }}\nGroup description: {{ $json.input.groupDescription || 'general book club' }}\n\nBook research context:\n{{ $json.bookContext }}\n\nReturn this JSON:\n{\n  \"book_title\": \"{{ $json.input.bookTitle }}\",\n  \"author\": \"{{ $json.input.author }}\",\n  \"guide_overview\": \"2-3 sentences on what makes this book rich for discussion \u2014 what tensions, questions, and themes make it especially good for a group\",\n  \"content_warnings\": [\"any themes that facilitators should be aware of before the meeting \u2014 violence, trauma, sensitive topics\"],\n  \"meeting_structure\": [\n    {\n      \"segment\": \"Opening (first N minutes)\",\n      \"duration_minutes\": 10,\n      \"purpose\": \"what this segment accomplishes\",\n      \"facilitator_prompt\": \"exactly what the facilitator says to open this segment\"\n    }\n  ],\n  \"discussion_questions\": {\n    \"opening\": [\n      {\n        \"question\": \"question text\",\n        \"purpose\": \"what kind of thinking this unlocks\",\n        \"follow_up\": \"a natural follow-up if the group gives a short answer\"\n      }\n    ],\n    \"core\": [\n      {\n        \"question\": \"question text\",\n        \"purpose\": \"what this probes\",\n        \"follow_up\": \"follow-up prompt\",\n        \"discussion_note\": \"how to handle if the group gets stuck or goes off track\"\n      }\n    ],\n    \"thematic\": [\n      {\n        \"question\": \"question that connects the book to bigger ideas or the readers' lives\",\n        \"purpose\": \"why this matters beyond the text\",\n        \"follow_up\": \"follow-up\"\n      }\n    ],\n    \"closing\": [\n      {\n        \"question\": \"closing question \u2014 often reflective or personal\",\n        \"purpose\": \"how this wraps the conversation\"\n      }\n    ]\n  },\n  \"passages_for_close_reading\": [\n    {\n      \"description\": \"describe the passage by chapter/section without spoiling it\",\n      \"why_useful\": \"what this passage reveals that's worth discussing\"\n    }\n  ],\n  \"facilitator_tips\": [\"3-4 practical tips for running THIS book's discussion specifically \u2014 not generic facilitation advice\"],\n  \"if_conversation_stalls\": \"specific thing the facilitator can say or do if energy drops\",\n  \"recommended_pairings\": [\"1-2 other books, films, or essays that pair well for comparison or as background reading\"]\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "l9o3r6u8-0007",
+      "name": "Claude Discussion Writer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        1280,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet guide;\ntry { guide = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst input = $('Validate Input').first().json;\nguide._meta = { meetingDuration: input.meetingDuration, groupSize: input.groupSize, discussionLevel: input.discussionLevel, replyEmail: input.replyEmail };\nreturn [{ json: guide }];"
+      },
+      "id": "l9o3r6u8-0008",
+      "name": "Parse Guide",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const g = $input.first().json;\nconst m = g._meta;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst qBlock = (title, questions, color) => {\n  if (!questions || !questions.length) return '';\n  const qs = questions.map((q,i) => `\n    <div style=\"border-left:3px solid ${color};padding:12px 16px;margin-bottom:12px;background:#fafafa;border-radius:0 6px 6px 0\">\n      <div style=\"font-size:15px;font-weight:600;color:#1a1a1a;margin-bottom:5px\">${i+1}. ${esc(q.question)}</div>\n      ${q.purpose ? `<div style=\"font-size:12px;color:#9ca3af;margin-bottom:4px\">\u21b3 ${esc(q.purpose)}</div>` : ''}\n      ${q.follow_up ? `<div style=\"font-size:13px;color:#6b7280;font-style:italic\">Follow-up: ${esc(q.follow_up)}</div>` : ''}\n      ${q.discussion_note ? `<div style=\"font-size:12px;color:#d97706;margin-top:5px\">\ud83d\udca1 ${esc(q.discussion_note)}</div>` : ''}\n    </div>`).join('');\n  return `<div style=\"margin-bottom:24px\">\n    <div style=\"font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:${color};margin-bottom:10px\">${esc(title)}</div>\n    ${qs}\n  </div>`;\n};\n\nconst structureRows = (g.meeting_structure||[]).map(seg => `\n  <div style=\"display:flex;gap:12px;padding:10px 0;border-bottom:1px solid #f3f4f6;align-items:flex-start\">\n    <div style=\"min-width:60px;text-align:center;background:#f3f4f6;border-radius:6px;padding:6px 8px\">\n      <div style=\"font-size:18px;font-weight:700;color:#1a1a1a\">${seg.duration_minutes}</div>\n      <div style=\"font-size:10px;color:#9ca3af;text-transform:uppercase\">min</div>\n    </div>\n    <div>\n      <div style=\"font-size:14px;font-weight:600\">${esc(seg.segment)}</div>\n      <div style=\"font-size:13px;color:#6b7280;margin-top:2px\">${esc(seg.purpose)}</div>\n      ${seg.facilitator_prompt ? `<div style=\"font-size:13px;color:#2563eb;margin-top:4px;font-style:italic\">\"${esc(seg.facilitator_prompt)}\"</div>` : ''}\n    </div>\n  </div>`).join('');\n\nconst passages = (g.passages_for_close_reading||[]).map(p => `\n  <div style=\"border:1px solid #e5e7eb;border-radius:6px;padding:12px 16px;margin-bottom:10px\">\n    <div style=\"font-size:14px;font-weight:600\">${esc(p.description)}</div>\n    <div style=\"font-size:13px;color:#6b7280;margin-top:4px\">${esc(p.why_useful)}</div>\n  </div>`).join('');\n\nconst tipsList = (g.facilitator_tips||[]).map(t => `<li style=\"font-size:14px;margin-bottom:7px;line-height:1.55;color:#374151\">${esc(t)}</li>`).join('');\nconst warnings = (g.content_warnings||[]).length ? `<div style=\"background:#fffbeb;padding:12px 20px;border:1px solid #fde68a;border-top:none\">\n  <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#92400e;margin-bottom:5px\">Content notes for facilitators</div>\n  ${(g.content_warnings||[]).map(w => `<div style=\"font-size:13px;color:#78350f;padding:3px 0\">${esc(w)}</div>`).join('')}\n</div>` : '';\n\nconst pairings = (g.recommended_pairings||[]).map(p => `<div style=\"font-size:13px;color:#374151;padding:5px 0;border-bottom:1px solid #f3f4f6\">${esc(p)}</div>`).join('');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f5f0f8;font-family:Georgia,'Times New Roman',serif;color:#1a1a1a\">\n<div style=\"max-width:700px;margin:0 auto\">\n  <div style=\"background:#2d1b4e;color:#fff;padding:22px 28px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#9b7fd4;margin-bottom:5px\">Book Club Discussion Guide \u00b7 ${esc(m.discussionLevel.replace(/_/g,' '))} \u00b7 ${m.meetingDuration} min \u00b7 ${m.groupSize} people</div>\n    <div style=\"font-size:22px;font-weight:700;line-height:1.3\">${esc(g.book_title)}</div>\n    <div style=\"font-size:15px;color:#9b7fd4;margin-top:4px\">by ${esc(g.author)}</div>\n  </div>\n  ${warnings}\n  <div style=\"background:#fff;padding:18px 28px;border:1px solid #e5e7eb;border-top:none\">\n    <p style=\"font-size:15px;line-height:1.75;color:#374151;margin:0\">${esc(g.guide_overview)}</p>\n  </div>\n  ${structureRows ? `<div style=\"background:#fff;padding:18px 28px;border:1px solid #e5e7eb;border-top:3px solid #f0eaf8\">\n    <div style=\"font-size:12px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:12px\">Meeting structure</div>\n    ${structureRows}\n  </div>` : ''}\n  <div style=\"background:#fff;padding:18px 28px;border:1px solid #e5e7eb;border-top:3px solid #f0eaf8\">\n    <div style=\"font-size:12px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:16px\">Discussion questions</div>\n    ${qBlock('Opening \u2014 ease in', g.discussion_questions?.opening, '#6b7280')}\n    ${qBlock('Core \u2014 the meat of it', g.discussion_questions?.core, '#2563eb')}\n    ${qBlock('Thematic \u2014 bigger picture', g.discussion_questions?.thematic, '#7c3aed')}\n    ${qBlock('Closing \u2014 reflect and land', g.discussion_questions?.closing, '#16a34a')}\n  </div>\n  ${passages ? `<div style=\"background:#fff;padding:18px 28px;border:1px solid #e5e7eb;border-top:3px solid #f0eaf8\">\n    <div style=\"font-size:12px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:10px\">Passages worth reading aloud</div>\n    ${passages}\n  </div>` : ''}\n  ${tipsList ? `<div style=\"background:#fff;padding:18px 28px;border:1px solid #e5e7eb;border-top:3px solid #f0eaf8\">\n    <div style=\"font-size:12px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:10px\">Facilitator tips for this book</div>\n    <ul style=\"padding-left:18px;margin:0\">${tipsList}</ul>\n  </div>` : ''}\n  ${g.if_conversation_stalls ? `<div style=\"background:#eff6ff;padding:14px 28px;border:1px solid #bfdbfe\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#1d4ed8;margin-bottom:5px\">If energy drops</div>\n    <div style=\"font-size:14px;color:#1e40af;line-height:1.6\">${esc(g.if_conversation_stalls)}</div>\n  </div>` : ''}\n  ${pairings ? `<div style=\"background:#fff;padding:14px 28px;border:1px solid #e5e7eb;border-top:3px solid #f0eaf8\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:7px\">Recommended pairings</div>\n    ${pairings}\n  </div>` : ''}\n  <div style=\"background:#2d1b4e;color:#6b4a9e;font-size:11px;padding:12px 28px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Book Club Discussion Generator \u00b7 ${new Date().toLocaleDateString()}\n  </div>\n</div></body></html>`;\n\nreturn [{ json: { html, replyEmail: m.replyEmail, bookTitle: g.book_title, author: g.author, guide: g } }];"
+      },
+      "id": "l9o3r6u8-0009",
+      "name": "Build Guide Doc",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1720,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "ce",
+              "leftValue": "={{ $json.replyEmail }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "l9o3r6u8-0010",
+      "name": "Has Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1940,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.replyEmail}}",
+        "subject": "Book club guide: {{ $json.bookTitle }} by {{ $json.author }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "l9o3r6u8-0011",
+      "name": "Email Guide",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2160,
+        260
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'generated', book: $json.bookTitle, author: $json.author, emailed: $json.replyEmail ? true : false, guide: $json.guide } }}"
+      },
+      "id": "l9o3r6u8-0012",
+      "name": "Return Guide",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2380,
+        320
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook \u2013 Submit Book": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Research Book",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Research Book": {
+      "main": [
+        [
+          {
+            "node": "Merge Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Context": {
+      "main": [
+        [
+          {
+            "node": "Claude Discussion Writer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Discussion Writer": {
+      "main": [
+        [
+          {
+            "node": "Parse Guide",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Guide": {
+      "main": [
+        [
+          {
+            "node": "Build Guide Doc",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Guide Doc": {
+      "main": [
+        [
+          {
+            "node": "Has Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Email?": {
+      "main": [
+        [
+          {
+            "node": "Email Guide",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Guide",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Guide": {
+      "main": [
+        [
+          {
+            "node": "Return Guide",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    "books",
+    "education",
+    "community",
+    "facilitation"
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-10T10:00:00.000Z",
+  "versionId": "v1.0.0"
+}

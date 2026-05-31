@@ -1,26 +1,540 @@
 {
-  "name": "FLOOWBOX - API Health Monitor",
+  "name": "API Health Monitor & Incident Notifier",
   "nodes": [
-    { "id": "a1b2c3d4-0001-4000-8000-000000000001", "name": "Every 5 Minutes", "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.2, "position": [250, 300], "parameters": { "rule": { "interval": [{"field": "minutes", "minutesInterval": 5}] } } },
-    { "id": "a1b2c3d4-0002-4000-8000-000000000002", "name": "Set Endpoints", "type": "n8n-nodes-base.set", "typeVersion": 3.4, "position": [500, 300], "parameters": { "assignments": { "assignments": [{"id":"e1","name":"endpoints","type":"array","value":"=[{\"name\":\"FLOOWBOX API\",\"url\":\"https://api.floowbox.com/health\",\"expected_status\":200},{\"name\":\"Webhooks\",\"url\":\"https://hooks.floowbox.com/ping\",\"expected_status\":200}]"}] } } },
-    { "id": "a1b2c3d4-0003-4000-8000-000000000003", "name": "Split Endpoints", "type": "n8n-nodes-base.splitOut", "typeVersion": 1, "position": [750, 300], "parameters": { "fieldToSplitOut": "endpoints" } },
-    { "id": "a1b2c3d4-0004-4000-8000-000000000004", "name": "Ping Endpoint", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [1000, 300], "parameters": { "url": "={{ $json.url }}", "options": { "timeout": 5000, "response": { "response": { "fullResponse": true } } } } },
-    { "id": "a1b2c3d4-0005-4000-8000-000000000005", "name": "Evaluate Status", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1250, 300], "parameters": { "jsCode": "const ep = $('Split Endpoints').item.json;\nconst res = $input.item.json;\nconst healthy = (res.statusCode||0) === ep.expected_status;\nreturn [{ json: { name: ep.name, url: ep.url, status: res.statusCode||0, healthy, checked_at: new Date().toISOString() } }];" } },
-    { "id": "a1b2c3d4-0006-4000-8000-000000000006", "name": "Filter Down", "type": "n8n-nodes-base.filter", "typeVersion": 2.2, "position": [1500, 300], "parameters": { "conditions": { "conditions": [{"leftValue": "={{ $json.healthy }}", "rightValue": false, "operator": {"type": "boolean", "operation": "equal"}}] } } },
-    { "id": "a1b2c3d4-0007-4000-8000-000000000007", "name": "Alert Slack", "type": "n8n-nodes-base.slack", "typeVersion": 2.2, "position": [1750, 300], "parameters": { "operation": "post", "channel": "#alerts", "text": "=🚨 *DOWN: {{ $json.name }}* | Status: {{ $json.status }} | Time: {{ $json.checked_at }}" } }
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "k8n2q5t7-0001",
+      "name": "Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        200,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "add-endpoint",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "k8n2q5t7-0002",
+      "name": "Webhook \u2013 Add Endpoint",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.MONITOR_SHEET_ID}}",
+        "sheetName": "Endpoints",
+        "options": {}
+      },
+      "id": "k8n2q5t7-0003",
+      "name": "Load Endpoints",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        420,
+        260
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const endpoints = $input.all().map(r => r.json).filter(r => r.url && r.enabled !== 'FALSE');\nreturn endpoints.map(ep => ({ json: {\n  name: ep.name || ep.url,\n  url: ep.url.trim(),\n  method: ep.method || 'GET',\n  expectedStatus: parseInt(ep.expected_status) || 200,\n  timeoutMs: parseInt(ep.timeout_ms) || 10000,\n  authHeader: ep.auth_header || '',\n  alertEmail: ep.alert_email || '',\n  alertSlack: ep.alert_slack || '',\n  consecutiveFailsBeforeAlert: parseInt(ep.fails_before_alert) || 2,\n  currentFailCount: parseInt(ep.current_fail_count) || 0,\n  lastStatus: ep.last_status || '',\n  lastChecked: ep.last_checked || ''\n} }));"
+      },
+      "id": "k8n2q5t7-0004",
+      "name": "Parse Endpoints",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "k8n2q5t7-0005",
+      "name": "Loop Each Endpoint",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        860,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "={{ $json.method }}",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ $json.authHeader }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": "={{ $json.timeoutMs }}",
+          "redirect": {
+            "redirect": {
+              "followRedirects": true
+            }
+          }
+        }
+      },
+      "id": "k8n2q5t7-0006",
+      "name": "Check Endpoint",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1060,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ep = $('Loop Each Endpoint').first().json;\nconst now = new Date().toISOString();\nlet status, responseTime, isUp, actualStatus, errorMessage;\n\ntry {\n  const resp = $input.first();\n  actualStatus = resp.json?.$response?.statusCode || 200;\n  responseTime = resp.json?.$response?.responseTime || 0;\n  isUp = actualStatus === ep.expectedStatus;\n  status = isUp ? 'up' : `wrong_status_${actualStatus}`;\n} catch(e) {\n  status = 'error';\n  isUp = false;\n  errorMessage = e.message;\n  responseTime = ep.timeoutMs;\n}\n\nconst newFailCount = isUp ? 0 : ep.currentFailCount + 1;\nconst wasDown = ep.lastStatus && ep.lastStatus !== 'up';\nconst justRecovered = wasDown && isUp;\nconst justFailed = !isUp && newFailCount >= ep.consecutiveFailsBeforeAlert;\nconst shouldAlert = justFailed || justRecovered;\n\nreturn [{ json: {\n  ...ep,\n  status,\n  isUp,\n  responseTime,\n  errorMessage: errorMessage || null,\n  newFailCount,\n  justRecovered,\n  justFailed,\n  shouldAlert,\n  checkedAt: now\n} }];"
+      },
+      "id": "k8n2q5t7-0007",
+      "name": "Evaluate Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1060,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": "={{$env.MONITOR_SHEET_ID}}",
+        "sheetName": "Endpoints",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "url": "={{ $json.url }}",
+            "last_status": "={{ $json.status }}",
+            "last_checked": "={{ $json.checkedAt }}",
+            "current_fail_count": "={{ $json.newFailCount }}",
+            "response_time_ms": "={{ $json.responseTime }}"
+          }
+        },
+        "options": {
+          "handlingExtraData": "insertInNewColumn"
+        }
+      },
+      "id": "k8n2q5t7-0008",
+      "name": "Update Status in Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        1280,
+        260
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.MONITOR_SHEET_ID}}",
+        "sheetName": "Incidents",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ $json.checkedAt }}",
+            "endpoint_name": "={{ $json.name }}",
+            "url": "={{ $json.url }}",
+            "status": "={{ $json.status }}",
+            "response_time_ms": "={{ $json.responseTime }}",
+            "fail_count": "={{ $json.newFailCount }}",
+            "event": "={{ $json.justRecovered ? 'RECOVERED' : $json.justFailed ? 'ALERT' : 'CHECK' }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "k8n2q5t7-0009",
+      "name": "Log to Incidents",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        1280,
+        380
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "ca",
+              "leftValue": "={{ $json.shouldAlert }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "k8n2q5t7-0010",
+      "name": "Alert Needed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{ $json.alertEmail || $env.DEFAULT_ALERT_EMAIL }}",
+        "subject": "={{ $json.justRecovered ? '\u2705 RECOVERED: ' + $json.name : '\ud83d\udea8 DOWN: ' + $json.name + ' \u2014 ' + $json.status }}",
+        "emailType": "html",
+        "message": "<!DOCTYPE html><html><body style='font-family:sans-serif;max-width:560px;margin:0 auto;padding:16px'><div style='background:{{ $json.justRecovered ? \"#166534\" : \"#7f1d1d\" }};color:#fff;padding:14px 18px;border-radius:6px 6px 0 0'><h2 style='margin:0;font-size:17px'>{{ $json.justRecovered ? \"\u2705 Service Recovered\" : \"\ud83d\udea8 Service Down\" }}</h2></div><div style='background:#fff;border:1px solid #e5e7eb;padding:18px;font-size:14px;line-height:1.7'><p><strong>Endpoint:</strong> {{ $json.name }}</p><p><strong>URL:</strong> <code>{{ $json.url }}</code></p><p><strong>Status:</strong> {{ $json.status }}</p><p><strong>Response time:</strong> {{ $json.responseTime }}ms</p><p><strong>Fail count:</strong> {{ $json.newFailCount }}</p><p><strong>Time:</strong> {{ $json.checkedAt }}</p>{{ $json.errorMessage ? '<p><strong>Error:</strong> ' + $json.errorMessage + '</p>' : '' }}</div></body></html>"
+      },
+      "id": "k8n2q5t7-0011",
+      "name": "Send Alert Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1720,
+        200
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "channel": "={{ $json.alertSlack || $env.DEFAULT_SLACK_CHANNEL }}",
+        "text": "={{ $json.justRecovered ? '\u2705 *RECOVERED: ' + $json.name + '*\\n' + $json.url + '\\nBack up after ' + $json.currentFailCount + ' failed checks.' : '\ud83d\udea8 *DOWN: ' + $json.name + '*\\n' + $json.url + '\\nStatus: ' + $json.status + ' \u00b7 Response: ' + $json.responseTime + 'ms \u00b7 Fails: ' + $json.newFailCount }}",
+        "otherOptions": {}
+      },
+      "id": "k8n2q5t7-0012",
+      "name": "Send Slack Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [
+        1720,
+        340
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-creds-01",
+          "name": "Slack Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nif (!body.url) return [{ json: { valid: false, error: 'Missing url' } }];\nreturn [{ json: {\n  valid: true,\n  name: body.name || body.url,\n  url: body.url.trim(),\n  method: body.method || 'GET',\n  expectedStatus: parseInt(body.expected_status) || 200,\n  timeoutMs: parseInt(body.timeout_ms) || 10000,\n  authHeader: body.auth_header || '',\n  alertEmail: body.alert_email || '',\n  alertSlack: body.alert_slack || '',\n  failsBeforeAlert: parseInt(body.fails_before_alert) || 2,\n  enabled: 'TRUE',\n  addedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "k8n2q5t7-0013",
+      "name": "Validate Endpoint",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cev",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "k8n2q5t7-0014",
+      "name": "Endpoint Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.MONITOR_SHEET_ID}}",
+        "sheetName": "Endpoints",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "name": "={{ $json.name }}",
+            "url": "={{ $json.url }}",
+            "method": "={{ $json.method }}",
+            "expected_status": "={{ $json.expectedStatus }}",
+            "timeout_ms": "={{ $json.timeoutMs }}",
+            "auth_header": "={{ $json.authHeader }}",
+            "alert_email": "={{ $json.alertEmail }}",
+            "alert_slack": "={{ $json.alertSlack }}",
+            "fails_before_alert": "={{ $json.failsBeforeAlert }}",
+            "enabled": "TRUE",
+            "current_fail_count": 0,
+            "added_at": "={{ $json.addedAt }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "k8n2q5t7-0015",
+      "name": "Save Endpoint",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        860,
+        500
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'added', name: $json.name, url: $json.url } }}"
+      },
+      "id": "k8n2q5t7-0016",
+      "name": "Return Added",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1080,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "k8n2q5t7-0017",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        620
+      ]
+    }
   ],
   "connections": {
-    "Every 5 Minutes": {"main": [[{"node": "Set Endpoints", "type": "main", "index": 0}]]},
-    "Set Endpoints": {"main": [[{"node": "Split Endpoints", "type": "main", "index": 0}]]},
-    "Split Endpoints": {"main": [[{"node": "Ping Endpoint", "type": "main", "index": 0}]]},
-    "Ping Endpoint": {"main": [[{"node": "Evaluate Status", "type": "main", "index": 0}]]},
-    "Evaluate Status": {"main": [[{"node": "Filter Down", "type": "main", "index": 0}]]},
-    "Filter Down": {"main": [[{"node": "Alert Slack", "type": "main", "index": 0}]]}
+    "Every 5 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Load Endpoints",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Endpoints": {
+      "main": [
+        [
+          {
+            "node": "Parse Endpoints",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Endpoints": {
+      "main": [
+        [
+          {
+            "node": "Loop Each Endpoint",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Each Endpoint": {
+      "main": [
+        [
+          {
+            "node": "Check Endpoint",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Endpoint": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Result": {
+      "main": [
+        [
+          {
+            "node": "Update Status in Sheet",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log to Incidents",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Alert Needed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Needed?": {
+      "main": [
+        [
+          {
+            "node": "Send Alert Email",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Slack Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Webhook \u2013 Add Endpoint": {
+      "main": [
+        [
+          {
+            "node": "Validate Endpoint",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Endpoint": {
+      "main": [
+        [
+          {
+            "node": "Endpoint Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Endpoint Valid?": {
+      "main": [
+        [
+          {
+            "node": "Save Endpoint",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Endpoint": {
+      "main": [
+        [
+          {
+            "node": "Return Added",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
-  "active": false,
-  "settings": { "executionOrder": "v1" },
-  "id": "a1b2c3d4-0000-4000-8000-000000000036",
-  "versionId": "a1b2c3d4-0000-4000-8000-000000000136",
-  "meta": { "templateCredsSetupCompleted": true },
-  "tags": []
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    "monitoring",
+    "devops",
+    "api",
+    "infrastructure"
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2025-05-10T09:00:00.000Z",
+  "versionId": "v1.0.0"
 }

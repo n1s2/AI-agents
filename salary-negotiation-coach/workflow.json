@@ -1,0 +1,383 @@
+{
+  "name": "Salary Negotiation Coach Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "negotiate-salary",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "m1p4s7v9-0001",
+      "name": "Webhook \u2013 Submit Situation",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['job_title', 'offer_amount', 'currency'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nconst offer = parseFloat(body.offer_amount);\nif (isNaN(offer) || offer <= 0) return [{ json: { valid: false, error: 'offer_amount must be a positive number' } }];\nconst scenarios = ['initial_offer', 'counter_received', 'final_round', 'promotion', 'annual_review', 'competing_offer'];\nconst scenario = scenarios.includes(body.scenario) ? body.scenario : 'initial_offer';\nreturn [{ json: {\n  valid: true,\n  jobTitle: body.job_title.trim(),\n  company: body.company || '',\n  industry: body.industry || '',\n  location: body.location || '',\n  offerAmount: offer,\n  offerType: body.offer_type || 'annual_salary',\n  currency: body.currency,\n  scenario,\n  targetAmount: parseFloat(body.target_amount) || null,\n  marketDataProvided: (body.market_data || '').slice(0, 500),\n  yearsExperience: parseInt(body.years_experience) || null,\n  currentSalary: parseFloat(body.current_salary) || null,\n  competingOffer: parseFloat(body.competing_offer) || null,\n  otherCompensation: (body.other_compensation || '').slice(0, 400),\n  specificConcerns: (body.specific_concerns || '').slice(0, 500),\n  negotiationStyle: body.negotiation_style || 'collaborative',\n  replyEmail: body.reply_email || null,\n  requestedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "m1p4s7v9-0002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cv",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "m1p4s7v9-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "m1p4s7v9-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.tavily.com/search",
+        "sendBody": true,
+        "specifyBody": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "api_key",
+              "value": "={{$env.TAVILY_API_KEY}}"
+            },
+            {
+              "name": "query",
+              "value": "={{ $json.jobTitle }} {{ $json.industry }} {{ $json.location }} salary range {{ new Date().getFullYear() }}"
+            },
+            {
+              "name": "search_depth",
+              "value": "basic"
+            },
+            {
+              "name": "max_results",
+              "value": 4
+            }
+          ]
+        }
+      },
+      "id": "m1p4s7v9-0005",
+      "name": "Research Market Rate",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        860,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const search = $('Research Market Rate').first().json;\nconst input = $('Validate Input').first().json;\nconst marketContext = (search.results||[]).map(r => `${r.title}: ${(r.content||r.snippet||'').slice(0,350)}`).join('\\n\\n');\nreturn [{ json: { input, marketContext: marketContext || 'No market data found \u2014 use general knowledge.' } }];"
+      },
+      "id": "m1p4s7v9-0006",
+      "name": "Merge Market Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1060,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.5,
+          "maxTokens": 2500
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are a direct, experienced salary negotiation coach. You've helped hundreds of people negotiate compensation and you know that most people leave money on the table because they either don't ask, ask too tentatively, or don't know what to say when pushed back on.\n\nYou give real, specific advice:\n- You tell people what number to ask for, not just \"ask for more\"\n- You write out the actual words to say, not just the concept\n- You're honest about when the offer is actually good and negotiation is low-value\n- You know the difference between a first offer (almost always negotiable) and a \"final offer\" (sometimes but not always)\n- You account for total compensation, not just base salary\n- You know when a competing offer gives real leverage vs when it backfires\n\nYou don't hedge everything. You give a clear recommendation and then explain the reasoning.\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Give salary negotiation coaching for this situation.\n\nRole: {{ $json.input.jobTitle }}\nCompany: {{ $json.input.company || 'not specified' }}\nIndustry: {{ $json.input.industry || 'not specified' }}\nLocation: {{ $json.input.location || 'not specified' }}\nScenario: {{ $json.input.scenario.replace(/_/g,' ') }}\n\nCurrent offer: {{ $json.input.currency }}{{ $json.input.offerAmount }} ({{ $json.input.offerType.replace(/_/g,' ') }})\nTarget amount: {{ $json.input.targetAmount ? $json.input.currency + $json.input.targetAmount : 'not specified' }}\nCurrent/previous salary: {{ $json.input.currentSalary ? $json.input.currency + $json.input.currentSalary : 'not disclosed' }}\nCompeting offer: {{ $json.input.competingOffer ? $json.input.currency + $json.input.competingOffer : 'none' }}\nOther compensation: {{ $json.input.otherCompensation || 'not specified' }}\nYears experience: {{ $json.input.yearsExperience || 'not specified' }}\nNegotiation style preference: {{ $json.input.negotiationStyle }}\nSpecific concerns: {{ $json.input.specificConcerns || 'none' }}\nMarket data provided: {{ $json.input.marketDataProvided || 'none provided' }}\n\nMarket rate research:\n{{ $json.marketContext }}\n\nReturn this JSON:\n{\n  \"offer_assessment\": {\n    \"verdict\": \"one of: strong_offer | fair_offer | below_market | significantly_below_market | needs_more_info\",\n    \"market_range_estimate\": \"estimated range for this role/location/experience based on research\",\n    \"gap_analysis\": \"how this offer compares to market \u2014 be specific with numbers if possible\"\n  },\n  \"negotiation_recommendation\": {\n    \"should_negotiate\": true,\n    \"counter_amount\": 0,\n    \"counter_rationale\": \"why this specific number \u2014 what it's based on\",\n    \"confidence\": \"high | medium | low\",\n    \"best_case\": 0,\n    \"realistic_case\": 0,\n    \"walk_away_point\": \"at what point to stop negotiating and either accept or decline\"\n  },\n  \"what_to_say\": {\n    \"opening_script\": \"exact words to use when making the counter-offer \u2014 written as if the person is saying them on a call or in an email. 3-5 sentences, direct and professional.\",\n    \"email_subject\": \"subject line if doing this over email\",\n    \"email_body\": \"full email if appropriate for this scenario \u2014 otherwise null\"\n  },\n  \"if_they_push_back\": [\n    {\n      \"pushback\": \"likely pushback they'll receive\",\n      \"response\": \"exactly what to say in response \u2014 specific words\"\n    }\n  ],\n  \"beyond_base_salary\": [\n    {\n      \"item\": \"specific compensation element to negotiate if base is stuck\",\n      \"ask\": \"how to ask for it specifically\",\n      \"value\": \"rough estimate of value if relevant\"\n    }\n  ],\n  \"competing_offer_advice\": \"{{ 'how to use the competing offer tactically \u2014 or null if none' if False else 'how to use the competing offer tactically \u2014 or null if none' }}\",\n  \"timing_advice\": \"when and how to have this conversation \u2014 timing, channel, follow-up plan\",\n  \"red_flags\": [\"anything in this situation that suggests unusual risk in negotiating\"],\n  \"one_thing_not_to_do\": \"the single most common mistake in this specific scenario\"\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "m1p4s7v9-0007",
+      "name": "Claude Negotiation Coach",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        1280,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet coaching;\ntry { coaching = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst input = $('Validate Input').first().json;\ncoaching._meta = { jobTitle: input.jobTitle, company: input.company, offerAmount: input.offerAmount, currency: input.currency, scenario: input.scenario, replyEmail: input.replyEmail };\nreturn [{ json: coaching }];"
+      },
+      "id": "m1p4s7v9-0008",
+      "name": "Parse Coaching",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const c = $input.first().json;\nconst m = c._meta;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nconst cur = m.currency;\n\nconst verdictConfig = {\n  strong_offer:            {color:'#16a34a', bg:'#f0fdf4', label:'Strong Offer'},\n  fair_offer:              {color:'#2563eb', bg:'#eff6ff', label:'Fair Offer'},\n  below_market:            {color:'#d97706', bg:'#fffbeb', label:'Below Market'},\n  significantly_below_market:{color:'#dc2626', bg:'#fef2f2', label:'Significantly Below Market'},\n  needs_more_info:         {color:'#6b7280', bg:'#f9fafb', label:'Needs More Info'}\n};\nconst vc = verdictConfig[c.offer_assessment?.verdict] || verdictConfig.needs_more_info;\n\nconst pushbackCards = (c.if_they_push_back||[]).map(p => `\n  <div style=\"border:1px solid #e5e7eb;border-radius:6px;margin-bottom:10px;overflow:hidden\">\n    <div style=\"background:#f9fafb;padding:8px 14px;font-size:13px;font-weight:600;color:#374151\">They say: \"${esc(p.pushback)}\"</div>\n    <div style=\"padding:10px 14px;font-size:14px;color:#1e40af;font-style:italic;line-height:1.6\">You say: \"${esc(p.response)}\"</div>\n  </div>`).join('');\n\nconst beyondBase = (c.beyond_base_salary||[]).map(b => `\n  <div style=\"padding:9px 0;border-bottom:1px solid #f3f4f6\">\n    <div style=\"font-size:14px;font-weight:600\">${esc(b.item)}</div>\n    <div style=\"font-size:13px;color:#2563eb;margin-top:2px\">${esc(b.ask)}</div>\n    ${b.value ? `<div style=\"font-size:12px;color:#9ca3af;margin-top:1px\">${esc(b.value)}</div>` : ''}\n  </div>`).join('');\n\nconst nr = c.negotiation_recommendation;\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f5f5f3;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111\">\n<div style=\"max-width:680px;margin:0 auto\">\n  <div style=\"background:#1c1917;color:#fff;padding:20px 28px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#78716c;margin-bottom:5px\">Salary Negotiation Coach \u00b7 ${esc(m.scenario.replace(/_/g,' '))}</div>\n    <div style=\"font-size:19px;font-weight:700\">${esc(m.jobTitle)}${m.company ? ' at ' + esc(m.company) : ''}</div>\n    <div style=\"font-size:14px;color:#a8a29e;margin-top:3px\">Offer: ${cur}${m.offerAmount.toLocaleString()}</div>\n  </div>\n\n  <div style=\"background:${vc.bg};padding:16px 28px;border:1px solid ${vc.color}44;border-top:none\">\n    <div style=\"display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px\">\n      <div>\n        <span style=\"background:${vc.color};color:#fff;font-size:12px;font-weight:700;padding:3px 10px;border-radius:12px\">${vc.label}</span>\n        <div style=\"font-size:13px;color:#555;margin-top:6px\">${esc(c.offer_assessment?.market_range_estimate)}</div>\n      </div>\n      ${nr?.should_negotiate && nr?.counter_amount ? `<div style=\"text-align:right\"><div style=\"font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.4px\">Counter ask</div><div style=\"font-size:26px;font-weight:800;color:#1a1a1a\">${cur}${nr.counter_amount.toLocaleString()}</div><div style=\"font-size:12px;color:#6b7280\">Realistic: ${cur}${(nr.realistic_case||0).toLocaleString()} \u00b7 Best case: ${cur}${(nr.best_case||0).toLocaleString()}</div></div>` : ''}\n    </div>\n    <div style=\"font-size:13px;color:#555;margin-top:8px;line-height:1.6\">${esc(c.offer_assessment?.gap_analysis)}</div>\n  </div>\n\n  ${nr ? `<div style=\"background:#fff;padding:18px 28px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f3\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:4px\">Recommendation \u00b7 ${esc(nr.confidence)} confidence</div>\n    <p style=\"font-size:14px;line-height:1.65;color:#374151;margin:0 0 10px\">${esc(nr.counter_rationale)}</p>\n    ${nr.walk_away_point ? `<div style=\"font-size:13px;color:#dc2626;background:#fef2f2;padding:8px 12px;border-radius:4px\">Walk-away: ${esc(nr.walk_away_point)}</div>` : ''}\n  </div>` : ''}\n\n  <div style=\"background:#f0f7ff;padding:18px 28px;border:1px solid #bfdbfe\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#1d4ed8;margin-bottom:10px\">What to say</div>\n    <div style=\"font-size:14px;line-height:1.75;color:#1e3a8a;font-style:italic;white-space:pre-wrap\">${esc(c.what_to_say?.opening_script)}</div>\n  </div>\n\n  ${c.what_to_say?.email_body ? `<div style=\"background:#fff;padding:18px 28px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f3\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:4px\">Email draft</div>\n    ${c.what_to_say.email_subject ? `<div style=\"font-size:13px;color:#6b7280;margin-bottom:8px\"><strong>Subject:</strong> ${esc(c.what_to_say.email_subject)}</div>` : ''}\n    <div style=\"font-size:14px;line-height:1.75;white-space:pre-wrap;color:#374151\">${esc(c.what_to_say.email_body)}</div>\n  </div>` : ''}\n\n  ${pushbackCards ? `<div style=\"background:#fff;padding:18px 28px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f3\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:10px\">When they push back</div>\n    ${pushbackCards}\n  </div>` : ''}\n\n  ${beyondBase ? `<div style=\"background:#fff;padding:18px 28px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f3\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:10px\">If base is stuck \u2014 negotiate these instead</div>\n    ${beyondBase}\n  </div>` : ''}\n\n  ${c.competing_offer_advice ? `<div style=\"background:#f0fdf4;padding:14px 28px;border:1px solid #bbf7d0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#15803d;margin-bottom:5px\">Competing offer strategy</div>\n    <div style=\"font-size:14px;color:#166534;line-height:1.6\">${esc(c.competing_offer_advice)}</div>\n  </div>` : ''}\n\n  <div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f3\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:6px\">Timing & approach</div>\n    <div style=\"font-size:14px;color:#374151;line-height:1.6\">${esc(c.timing_advice)}</div>\n  </div>\n\n  ${(c.red_flags||[]).length ? `<div style=\"background:#fffbeb;padding:14px 28px;border:1px solid #fde68a\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#92400e;margin-bottom:7px\">Watch out</div>\n    ${(c.red_flags||[]).map(rf=>`<div style=\"font-size:14px;color:#78350f;padding:4px 0\">\u26a0 ${esc(rf)}</div>`).join('')}\n  </div>` : ''}\n\n  <div style=\"background:#fef2f2;padding:12px 28px;border:1px solid #fecaca\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#b91c1c;margin-bottom:4px\">Don't do this</div>\n    <div style=\"font-size:14px;color:#7f1d1d;line-height:1.6\">${esc(c.one_thing_not_to_do)}</div>\n  </div>\n\n  <div style=\"background:#1c1917;color:#57534e;font-size:11px;padding:12px 28px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Salary Negotiation Coach \u00b7 ${new Date().toLocaleDateString()}\n  </div>\n</div></body></html>`;\n\nreturn [{ json: { html, replyEmail: m.replyEmail, jobTitle: m.jobTitle, offerAmount: m.offerAmount, counterAmount: nr?.counter_amount || null, currency: cur, coaching: c } }];"
+      },
+      "id": "m1p4s7v9-0009",
+      "name": "Build Coaching Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1720,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "ce",
+              "leftValue": "={{ $json.replyEmail }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "m1p4s7v9-0010",
+      "name": "Has Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1940,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.replyEmail}}",
+        "subject": "Salary coaching: {{ $json.jobTitle }} \u00b7 Offer {{ $json.currency }}{{ $json.offerAmount }}{{ $json.counterAmount ? ' \u00b7 Counter: ' + $json.currency + $json.counterAmount : '' }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "m1p4s7v9-0011",
+      "name": "Email Coaching",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2160,
+        260
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'coached', job_title: $json.jobTitle, offer_amount: $json.offerAmount, counter_amount: $json.counterAmount, currency: $json.currency, emailed: $json.replyEmail ? true : false, coaching: $json.coaching } }}"
+      },
+      "id": "m1p4s7v9-0012",
+      "name": "Return Coaching",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2380,
+        320
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook \u2013 Submit Situation": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Research Market Rate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Research Market Rate": {
+      "main": [
+        [
+          {
+            "node": "Merge Market Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Market Data": {
+      "main": [
+        [
+          {
+            "node": "Claude Negotiation Coach",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Negotiation Coach": {
+      "main": [
+        [
+          {
+            "node": "Parse Coaching",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Coaching": {
+      "main": [
+        [
+          {
+            "node": "Build Coaching Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Coaching Report": {
+      "main": [
+        [
+          {
+            "node": "Has Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Email?": {
+      "main": [
+        [
+          {
+            "node": "Email Coaching",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Coaching",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Coaching": {
+      "main": [
+        [
+          {
+            "node": "Return Coaching",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    "career",
+    "negotiation",
+    "salary",
+    "coaching"
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-10T11:00:00.000Z",
+  "versionId": "v1.0.0"
+}
