@@ -1,0 +1,602 @@
+{
+  "name": "Social Media Crisis Monitor",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "o3r6u9x2-0001",
+      "name": "Every 30 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        200,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "crisis-check",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "o3r6u9x2-0002",
+      "name": "Webhook \u2013 Manual Check",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.CRISIS_SHEET_ID}}",
+        "sheetName": "Brands",
+        "options": {}
+      },
+      "id": "o3r6u9x2-0003",
+      "name": "Load Brand Config",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        420,
+        260
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const brands = $input.all().map(r => r.json).filter(r => r.brand_name && r.enabled !== 'FALSE');\nreturn brands.map(b => ({ json: {\n  brandName: b.brand_name.trim(),\n  searchTerms: (b.search_terms || b.brand_name).split(',').map(s => s.trim()).filter(Boolean),\n  alertEmail: b.alert_email || '',\n  alertSlack: b.alert_slack || '',\n  crisisThreshold: parseInt(b.crisis_threshold) || 5,\n  industry: b.industry || '',\n  competitors: (b.competitors || '').split(',').map(s => s.trim()).filter(Boolean)\n} }));"
+      },
+      "id": "o3r6u9x2-0004",
+      "name": "Parse Brand Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "o3r6u9x2-0005",
+      "name": "Loop Each Brand",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        860,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.tavily.com/search",
+        "sendBody": true,
+        "specifyBody": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "api_key",
+              "value": "={{$env.TAVILY_API_KEY}}"
+            },
+            {
+              "name": "query",
+              "value": "={{ $json.brandName }} {{ $json.searchTerms.join(' OR ') }} complaint problem scandal controversy"
+            },
+            {
+              "name": "search_depth",
+              "value": "basic"
+            },
+            {
+              "name": "max_results",
+              "value": 8
+            },
+            {
+              "name": "days",
+              "value": 1
+            }
+          ]
+        }
+      },
+      "id": "o3r6u9x2-0006",
+      "name": "Search Negative Mentions",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1060,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.tavily.com/search",
+        "sendBody": true,
+        "specifyBody": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "api_key",
+              "value": "={{$env.TAVILY_API_KEY}}"
+            },
+            {
+              "name": "query",
+              "value": "={{ $json.brandName }} news announcement today"
+            },
+            {
+              "name": "search_depth",
+              "value": "basic"
+            },
+            {
+              "name": "max_results",
+              "value": 4
+            },
+            {
+              "name": "days",
+              "value": 1
+            }
+          ]
+        }
+      },
+      "id": "o3r6u9x2-0007",
+      "name": "Search General News",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1060,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const brand = $('Loop Each Brand').first().json;\nconst negResults = $('Search Negative Mentions').first().json?.results || [];\nconst newsResults = $('Search General News').first().json?.results || [];\nconst allResults = [...negResults, ...newsResults];\nconst unique = allResults.filter((r, i, arr) => arr.findIndex(x => x.url === r.url) === i);\n\nconst negKeywords = ['scandal', 'controversy', 'lawsuit', 'boycott', 'outrage', 'backlash', 'complaint', 'problem', 'fail', 'crisis', 'recall', 'breach', 'hack', 'fraud', 'mislead', 'discriminat', 'harass', 'abuse', 'fire', 'resign', 'bankrupt', 'shutdown'];\nconst posKeywords = ['award', 'launch', 'partnership', 'growth', 'funding', 'expansion', 'recognition', 'milestone'];\n\nconst scoredResults = unique.map(r => {\n  const text = `${r.title} ${r.content || r.snippet || ''}`.toLowerCase();\n  const negScore = negKeywords.filter(k => text.includes(k)).length;\n  const posScore = posKeywords.filter(k => text.includes(k)).length;\n  const brandMentioned = brand.searchTerms.some(t => text.includes(t.toLowerCase()));\n  return { ...r, negScore, posScore, brandMentioned, netSentiment: posScore - negScore };\n});\n\nconst negativeItems = scoredResults.filter(r => r.negScore > 0 && r.brandMentioned).sort((a,b) => b.negScore - a.negScore);\nconst positiveItems = scoredResults.filter(r => r.posScore > 0 && r.brandMentioned && r.negScore === 0);\nconst totalNegScore = negativeItems.reduce((s,r) => s + r.negScore, 0);\nconst crisisLevel = totalNegScore >= brand.crisisThreshold * 2 ? 'critical' : totalNegScore >= brand.crisisThreshold ? 'elevated' : negativeItems.length > 0 ? 'watch' : 'clear';\n\nreturn [{ json: {\n  brand,\n  negativeItems: negativeItems.slice(0, 6),\n  positiveItems: positiveItems.slice(0, 3),\n  totalNegScore,\n  crisisLevel,\n  checkedAt: new Date().toISOString(),\n  totalMentions: unique.filter(r => r.brandMentioned).length\n} }];"
+      },
+      "id": "o3r6u9x2-0008",
+      "name": "Score Crisis Level",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cw",
+              "leftValue": "={{ $json.crisisLevel }}",
+              "rightValue": "clear",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "o3r6u9x2-0009",
+      "name": "Any Signals?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.4,
+          "maxTokens": 1000
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are a PR crisis communications specialist monitoring social media and news for brand issues. You assess what's actually happening, distinguish between noise and genuine threats, and give specific, actionable recommendations. You're calm but direct. Under 250 words.",
+              "role": "system"
+            },
+            {
+              "content": "Assess this brand monitoring report and give response recommendations.\n\nBrand: {{ $json.brand.brandName }}\nIndustry: {{ $json.brand.industry || 'not specified' }}\nCrisis level: {{ $json.crisisLevel.toUpperCase() }}\nNegative signal score: {{ $json.totalNegScore }}\nTotal mentions found: {{ $json.totalMentions }}\nChecked: {{ $json.checkedAt }}\n\nNegative/concerning items:\n{{ $json.negativeItems.map(r => `- ${r.title} (score: ${r.negScore}): ${(r.content||r.snippet||'').slice(0,150)}`).join('\\n') || 'none' }}\n\nPositive/neutral news:\n{{ $json.positiveItems.map(r => `- ${r.title}`).join('\\n') || 'none' }}\n\nGive: (1) what's actually happening and how serious it is, (2) whether this is noise or a genuine threat requiring action, (3) specific recommended next steps for the comms team right now.",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "o3r6u9x2-0010",
+      "name": "Claude Crisis Analyst",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        1720,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.CRISIS_SHEET_ID}}",
+        "sheetName": "Incidents",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "checked_at": "={{ $json.checkedAt }}",
+            "brand": "={{ $json.brand.brandName }}",
+            "crisis_level": "={{ $json.crisisLevel }}",
+            "neg_score": "={{ $json.totalNegScore }}",
+            "total_mentions": "={{ $json.totalMentions }}",
+            "top_item": "={{ $json.negativeItems[0]?.title || '' }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "o3r6u9x2-0011",
+      "name": "Log to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        1720,
+        340
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const analysis = $('Claude Crisis Analyst').first().json.text || $('Claude Crisis Analyst').first().json.content?.[0]?.text || '';\nconst d = $('Score Crisis Level').first().json;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst levelConfig = {\n  critical: {color:'#dc2626', bg:'#fef2f2', label:'CRITICAL', emoji:'\ud83d\udea8'},\n  elevated: {color:'#d97706', bg:'#fffbeb', label:'ELEVATED', emoji:'\u26a0\ufe0f'},\n  watch:    {color:'#2563eb', bg:'#eff6ff', label:'WATCH', emoji:'\ud83d\udc41\ufe0f'},\n  clear:    {color:'#16a34a', bg:'#f0fdf4', label:'CLEAR', emoji:'\u2705'}\n};\nconst lc = levelConfig[d.crisisLevel] || levelConfig.watch;\n\nconst negRows = d.negativeItems.map(item => `\n  <div style=\"border-left:3px solid ${lc.color};padding:10px 14px;background:#fafafa;border-radius:0 6px 6px 0;margin-bottom:8px\">\n    <div style=\"font-size:14px;font-weight:600;color:#1a1a1a\">${esc(item.title)}</div>\n    <div style=\"font-size:12px;color:#9ca3af;margin-top:2px\">${esc((item.content||item.snippet||'').slice(0,160))}</div>\n    <div style=\"font-size:11px;color:${lc.color};margin-top:3px;font-weight:700\">Signal strength: ${item.negScore}</div>\n  </div>`).join('');\n\nconst posRows = d.positiveItems.map(item => `\n  <div style=\"font-size:13px;color:#374151;padding:5px 0;border-bottom:1px solid #f0fdf4\">\u2713 ${esc(item.title)}</div>`).join('');\n\nconst analysisHtml = analysis.replace(/\\*\\*(.+?)\\*\\*/g,'<strong>$1</strong>').replace(/\n/g,'<br>');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head>\n<body style=\"margin:0;padding:16px;background:#f9fafb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111\">\n<div style=\"max-width:660px;margin:0 auto\">\n  <div style=\"background:#111827;color:#fff;padding:18px 26px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#6b7280;margin-bottom:4px\">Crisis Monitor \u00b7 ${esc(d.checkedAt.split('T')[0])}</div>\n    <div style=\"font-size:18px;font-weight:700\">${lc.emoji} ${esc(d.brand.brandName)} \u2014 ${lc.label}</div>\n    <div style=\"font-size:13px;color:#9ca3af;margin-top:3px\">${d.negativeItems.length} negative signals \u00b7 ${d.totalMentions} mentions found</div>\n  </div>\n  <div style=\"background:${lc.bg};padding:14px 26px;border:1px solid ${lc.color}44;border-top:none\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:${lc.color};margin-bottom:7px\">PR Analysis</div>\n    <p style=\"font-size:14px;line-height:1.75;color:#374151;margin:0\">${analysisHtml}</p>\n  </div>\n  ${negRows ? `<div style=\"background:#fff;padding:16px 26px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:10px\">Concerning signals</div>\n    ${negRows}\n  </div>` : ''}\n  ${posRows ? `<div style=\"background:#f0fdf4;padding:14px 26px;border:1px solid #bbf7d0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#15803d;margin-bottom:7px\">Positive news</div>\n    ${posRows}\n  </div>` : ''}\n  <div style=\"background:#111827;color:#4b5563;font-size:11px;padding:10px 26px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Crisis Monitor \u00b7 ${esc(d.brand.brandName)} \u00b7 ${esc(d.checkedAt.replace('T',' ').slice(0,16))} UTC\n  </div>\n</div></body></html>`;\n\nreturn [{ json: { html, brand: d.brand, crisisLevel: d.crisisLevel, alertEmail: d.brand.alertEmail, alertSlack: d.brand.alertSlack } }];"
+      },
+      "id": "o3r6u9x2-0012",
+      "name": "Build Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1940,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cce",
+              "leftValue": "={{ $json.alertEmail }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "o3r6u9x2-0013",
+      "name": "Has Alert Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.alertEmail}}",
+        "subject": "{{ $json.crisisLevel === 'critical' ? '\ud83d\udea8 CRITICAL' : $json.crisisLevel === 'elevated' ? '\u26a0\ufe0f ELEVATED' : '\ud83d\udc41\ufe0f WATCH' }}: {{ $json.brand.brandName }} crisis monitor",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "o3r6u9x2-0014",
+      "name": "Send Alert Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2380,
+        140
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "ccs",
+              "leftValue": "={{ $json.alertSlack }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "o3r6u9x2-0015",
+      "name": "Has Slack?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "channel": "={{ $json.alertSlack }}",
+        "text": "={{ $json.crisisLevel === 'critical' ? '\ud83d\udea8' : $json.crisisLevel === 'elevated' ? '\u26a0\ufe0f' : '\ud83d\udc41\ufe0f' }} *{{ $json.crisisLevel.toUpperCase() }}: {{ $json.brand.brandName }}*\nCrisis level detected. Check email for full report.",
+        "otherOptions": {}
+      },
+      "id": "o3r6u9x2-0016",
+      "name": "Send Slack Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [
+        2380,
+        340
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-creds-01",
+          "name": "Slack Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nconst brand = body.brand_name || '';\nreturn [{ json: { manualBrand: brand, triggeredAt: new Date().toISOString() } }];"
+      },
+      "id": "o3r6u9x2-0017",
+      "name": "Parse Manual Trigger",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'checked', brand: $('Score Crisis Level').first().json.brand.brandName, crisis_level: $('Score Crisis Level').first().json.crisisLevel, neg_score: $('Score Crisis Level').first().json.totalNegScore } }}"
+      },
+      "id": "o3r6u9x2-0018",
+      "name": "Return Status",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2160,
+        480
+      ]
+    }
+  ],
+  "connections": {
+    "Every 30 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Load Brand Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Brand Config": {
+      "main": [
+        [
+          {
+            "node": "Parse Brand Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Brand Config": {
+      "main": [
+        [
+          {
+            "node": "Loop Each Brand",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Each Brand": {
+      "main": [
+        [
+          {
+            "node": "Search Negative Mentions",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Search General News",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Negative Mentions": {
+      "main": [
+        [
+          {
+            "node": "Score Crisis Level",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search General News": {
+      "main": [
+        [
+          {
+            "node": "Score Crisis Level",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score Crisis Level": {
+      "main": [
+        [
+          {
+            "node": "Any Signals?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Signals?": {
+      "main": [
+        [
+          {
+            "node": "Claude Crisis Analyst",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Claude Crisis Analyst": {
+      "main": [
+        [
+          {
+            "node": "Build Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Alert": {
+      "main": [
+        [
+          {
+            "node": "Has Alert Email?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Has Slack?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Return Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Alert Email?": {
+      "main": [
+        [
+          {
+            "node": "Send Alert Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Has Slack?": {
+      "main": [
+        [
+          {
+            "node": "Send Slack Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Webhook \u2013 Manual Check": {
+      "main": [
+        [
+          {
+            "node": "Parse Manual Trigger",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Brand Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    "pr",
+    "monitoring",
+    "crisis",
+    "social-media"
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2025-05-11T10:00:00.000Z",
+  "versionId": "v1.0.0"
+}

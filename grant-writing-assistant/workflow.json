@@ -1,0 +1,383 @@
+{
+  "name": "Grant Writing Assistant Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "write-grant",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "n2q5t8w1-0001",
+      "name": "Webhook \u2013 Submit Grant Brief",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['org_name', 'project_title', 'funder_name', 'funding_amount_requested', 'project_description'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nconst amount = parseFloat(body.funding_amount_requested);\nif (isNaN(amount) || amount <= 0) return [{ json: { valid: false, error: 'funding_amount_requested must be a positive number' } }];\nconst grantTypes = ['federal', 'state', 'foundation', 'corporate', 'community', 'research', 'arts', 'education', 'health', 'other'];\nconst grantType = grantTypes.includes(body.grant_type) ? body.grant_type : 'foundation';\nreturn [{ json: {\n  valid: true,\n  orgName: body.org_name.trim(),\n  orgDescription: (body.org_description || '').slice(0, 600),\n  orgType: body.org_type || 'nonprofit',\n  projectTitle: body.project_title.trim(),\n  projectDescription: body.project_description.trim().slice(0, 2000),\n  funderName: body.funder_name.trim(),\n  funderPriorities: (body.funder_priorities || '').slice(0, 600),\n  grantType,\n  fundingAmountRequested: amount,\n  currency: body.currency || 'USD',\n  projectDuration: body.project_duration || '12 months',\n  targetPopulation: (body.target_population || '').slice(0, 400),\n  expectedOutcomes: (body.expected_outcomes || '').slice(0, 600),\n  previousFunding: body.previous_funding || '',\n  section: body.section || 'full_narrative',\n  wordLimit: parseInt(body.word_limit) || null,\n  replyEmail: body.reply_email || null,\n  requestedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "n2q5t8w1-0002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cv",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "n2q5t8w1-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "n2q5t8w1-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.tavily.com/search",
+        "sendBody": true,
+        "specifyBody": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "api_key",
+              "value": "={{$env.TAVILY_API_KEY}}"
+            },
+            {
+              "name": "query",
+              "value": "={{ $json.funderName }} grant priorities funding focus areas {{ new Date().getFullYear() }}"
+            },
+            {
+              "name": "search_depth",
+              "value": "basic"
+            },
+            {
+              "name": "max_results",
+              "value": 3
+            }
+          ]
+        }
+      },
+      "id": "n2q5t8w1-0005",
+      "name": "Research Funder",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        860,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const search = $('Research Funder').first().json;\nconst input = $('Validate Input').first().json;\nconst funderContext = (search.results||[]).map(r => `${r.title}: ${(r.content||r.snippet||'').slice(0,350)}`).join('\\n\\n');\nreturn [{ json: { input, funderContext: funderContext || 'No funder context found \u2014 use provided priorities.' } }];"
+      },
+      "id": "n2q5t8w1-0006",
+      "name": "Merge Funder Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1060,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.55,
+          "maxTokens": 3500
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are an experienced grant writer who has helped nonprofits, research institutions, and community organizations secure millions in funding. You write compelling, funder-aligned grant narratives that are specific, evidence-based, and clearly articulate impact.\n\nGood grant writing:\n- Opens with the problem, not the organization\n- Uses specific data and statistics to establish need\n- Aligns language directly to the funder's stated priorities\n- Shows a clear logic model: inputs \u2192 activities \u2192 outputs \u2192 outcomes \u2192 impact\n- Is specific about who will be served, how many, and how\n- Demonstrates organizational capacity without bragging\n- Makes the budget feel justified without being in a narrative\n\nYou write in clear, professional prose. No jargon unless the funder uses it. No vague language like \"comprehensive\" or \"holistic\" unless they do. Every sentence should earn its place.\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Write a grant application section.\n\nOrganization: {{ $json.input.orgName }} ({{ $json.input.orgType }})\nOrg description: {{ $json.input.orgDescription || 'not provided' }}\nProject title: {{ $json.input.projectTitle }}\nProject description: {{ $json.input.projectDescription }}\nFunder: {{ $json.input.funderName }} ({{ $json.input.grantType }} grant)\nFunder priorities (provided): {{ $json.input.funderPriorities || 'none provided' }}\nAmount requested: {{ $json.input.currency }}{{ $json.input.fundingAmountRequested.toLocaleString() }}\nProject duration: {{ $json.input.projectDuration }}\nTarget population: {{ $json.input.targetPopulation || 'not specified' }}\nExpected outcomes: {{ $json.input.expectedOutcomes || 'not specified' }}\nPrevious funding from this funder: {{ $json.input.previousFunding || 'none' }}\nSection requested: {{ $json.input.section }}\nWord limit: {{ $json.input.wordLimit ? $json.input.wordLimit + ' words' : 'no limit specified' }}\n\nFunder research context:\n{{ $json.funderContext }}\n\nReturn this JSON:\n{\n  \"alignment_analysis\": \"2-3 sentences on how this project aligns with this funder's priorities \u2014 be specific about the match\",\n  \"sections\": {\n    \"executive_summary\": \"150-200 word compelling overview \u2014 problem, solution, population served, outcomes, amount requested. Write this last but put it first.\",\n    \"statement_of_need\": \"Establish the problem with data. 250-400 words. Start with the problem, not the organization. Use specific statistics. Connect to funder priorities.\",\n    \"project_description\": \"Describe the project activities clearly. 400-600 words. Who does what, when, how, for whom. Include a clear logic model narrative.\",\n    \"organizational_capacity\": \"100-200 words demonstrating the org can actually do this. Track record, staff expertise, partnerships.\",\n    \"evaluation_plan\": \"150-250 words. How will you know if it worked? Specific metrics, data collection methods, who evaluates.\",\n    \"budget_narrative\": \"100-200 words justifying the request. Not line items but the rationale for why this amount is needed and appropriate.\"\n  },\n  \"requested_section_only\": \"if section is not full_narrative, return only the requested section here as the primary output \u2014 otherwise null\",\n  \"red_flag_check\": [\"any weaknesses in the application as submitted \u2014 things reviewers might push back on\"],\n  \"strengthening_suggestions\": [\"2-3 specific additions or changes that would strengthen this application before submission\"],\n  \"funder_language_to_use\": [\"3-5 specific phrases or terms from the funder's materials that should appear in the application\"]\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "n2q5t8w1-0007",
+      "name": "Claude Grant Writer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        1280,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet grant;\ntry { grant = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst input = $('Validate Input').first().json;\ngrant._meta = { orgName: input.orgName, projectTitle: input.projectTitle, funderName: input.funderName, amount: input.fundingAmountRequested, currency: input.currency, section: input.section, replyEmail: input.replyEmail };\nreturn [{ json: grant }];"
+      },
+      "id": "n2q5t8w1-0008",
+      "name": "Parse Grant",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const g = $input.first().json;\nconst m = g._meta;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst sectionTitles = {\n  executive_summary: 'Executive Summary',\n  statement_of_need: 'Statement of Need',\n  project_description: 'Project Description',\n  organizational_capacity: 'Organizational Capacity',\n  evaluation_plan: 'Evaluation Plan',\n  budget_narrative: 'Budget Narrative'\n};\n\nconst sections = g.sections || {};\nconst sectionBlocks = Object.entries(sectionTitles).map(([key, title]) => {\n  const content = sections[key];\n  if (!content) return '';\n  return `<div style=\"margin-bottom:28px\">\n    <div style=\"font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#374151;border-bottom:2px solid #e5e7eb;padding-bottom:6px;margin-bottom:12px\">${esc(title)}</div>\n    <div style=\"font-size:15px;line-height:1.8;color:#1a1a1a;white-space:pre-wrap\">${esc(content)}</div>\n  </div>`;\n}).join('');\n\nconst redFlags = (g.red_flag_check||[]).map(rf => `<div style=\"font-size:14px;color:#7f1d1d;padding:5px 0;border-bottom:1px solid #fecaca\">\u26a0 ${esc(rf)}</div>`).join('');\nconst suggestions = (g.strengthening_suggestions||[]).map(s => `<li style=\"font-size:14px;margin-bottom:7px;line-height:1.55;color:#374151\">${esc(s)}</li>`).join('');\nconst funderLang = (g.funder_language_to_use||[]).map(l => `<span style=\"display:inline-block;background:#dbeafe;color:#1e40af;font-size:12px;padding:3px 10px;border-radius:12px;margin:3px 4px 3px 0\">${esc(l)}</span>`).join('');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f5f4f0;font-family:Georgia,'Times New Roman',serif;color:#1a1a1a\">\n<div style=\"max-width:720px;margin:0 auto\">\n  <div style=\"background:#1a2744;color:#fff;padding:22px 32px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#7b92c4;margin-bottom:5px\">Grant Application \u00b7 ${esc(m.funderName)}</div>\n    <div style=\"font-size:20px;font-weight:700;line-height:1.3\">${esc(m.projectTitle)}</div>\n    <div style=\"font-size:14px;color:#7b92c4;margin-top:4px\">${esc(m.orgName)} \u00b7 ${m.currency}${m.amount.toLocaleString()} requested</div>\n  </div>\n\n  <div style=\"background:#eff6ff;padding:14px 32px;border:1px solid #bfdbfe;border-top:none\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#1d4ed8;margin-bottom:5px\">Alignment with funder</div>\n    <p style=\"font-size:14px;line-height:1.7;color:#1e3a8a;margin:0\">${esc(g.alignment_analysis)}</p>\n  </div>\n\n  <div style=\"background:#fff;padding:28px 32px;border:1px solid #e5e7eb;border-top:none\">\n    ${m.section !== 'full_narrative' && g.requested_section_only\n      ? `<div style=\"font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#374151;border-bottom:2px solid #e5e7eb;padding-bottom:6px;margin-bottom:16px\">${esc(sectionTitles[m.section] || m.section)}</div>\n         <div style=\"font-size:15px;line-height:1.8;color:#1a1a1a;white-space:pre-wrap\">${esc(g.requested_section_only)}</div>`\n      : sectionBlocks}\n  </div>\n\n  ${funderLang ? `<div style=\"background:#fff;padding:14px 32px;border:1px solid #e5e7eb;border-top:3px solid #f5f4f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:8px\">Use this funder's language</div>\n    <div>${funderLang}</div>\n  </div>` : ''}\n\n  ${redFlags ? `<div style=\"background:#fef2f2;padding:14px 32px;border:1px solid #fecaca\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#b91c1c;margin-bottom:8px\">Potential weaknesses \u2014 address before submitting</div>\n    ${redFlags}\n  </div>` : ''}\n\n  ${suggestions ? `<div style=\"background:#fff;padding:14px 32px;border:1px solid #e5e7eb;border-top:3px solid #f5f4f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:8px\">Strengthening suggestions</div>\n    <ul style=\"padding-left:18px;margin:0\">${suggestions}</ul>\n  </div>` : ''}\n\n  <div style=\"background:#1a2744;color:#3d5a99;font-size:11px;padding:12px 32px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Grant Writing Assistant \u00b7 ${new Date().toLocaleDateString()}\n  </div>\n</div></body></html>`;\n\nreturn [{ json: { html, replyEmail: m.replyEmail, projectTitle: m.projectTitle, funderName: m.funderName, grant: g } }];"
+      },
+      "id": "n2q5t8w1-0009",
+      "name": "Build Grant Doc",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1720,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "ce",
+              "leftValue": "={{ $json.replyEmail }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "n2q5t8w1-0010",
+      "name": "Has Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1940,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.replyEmail}}",
+        "subject": "Grant draft: {{ $json.projectTitle }} \u2014 {{ $json.funderName }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "n2q5t8w1-0011",
+      "name": "Email Draft",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2160,
+        260
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'drafted', project: $json.projectTitle, funder: $json.funderName, emailed: $json.replyEmail ? true : false, grant: $json.grant } }}"
+      },
+      "id": "n2q5t8w1-0012",
+      "name": "Return Grant",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2380,
+        320
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook \u2013 Submit Grant Brief": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Research Funder",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Research Funder": {
+      "main": [
+        [
+          {
+            "node": "Merge Funder Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Funder Context": {
+      "main": [
+        [
+          {
+            "node": "Claude Grant Writer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Grant Writer": {
+      "main": [
+        [
+          {
+            "node": "Parse Grant",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Grant": {
+      "main": [
+        [
+          {
+            "node": "Build Grant Doc",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Grant Doc": {
+      "main": [
+        [
+          {
+            "node": "Has Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Email?": {
+      "main": [
+        [
+          {
+            "node": "Email Draft",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Grant",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Draft": {
+      "main": [
+        [
+          {
+            "node": "Return Grant",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    "grants",
+    "nonprofit",
+    "writing",
+    "fundraising"
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-11T09:00:00.000Z",
+  "versionId": "v1.0.0"
+}

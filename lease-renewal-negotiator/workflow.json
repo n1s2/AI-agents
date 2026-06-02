@@ -1,0 +1,383 @@
+{
+  "name": "Lease Renewal Negotiator Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lease-negotiation",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "p4s7v1y3-0001",
+      "name": "Webhook \u2013 Submit Lease",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['property_address', 'current_rent', 'currency', 'proposed_new_rent', 'lease_type'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nconst currentRent = parseFloat(body.current_rent);\nconst proposedRent = parseFloat(body.proposed_new_rent);\nif (isNaN(currentRent) || isNaN(proposedRent)) return [{ json: { valid: false, error: 'rent amounts must be numbers' } }];\nconst leaseTypes = ['residential', 'commercial', 'retail', 'office', 'industrial', 'short_term'];\nconst leaseType = leaseTypes.includes(body.lease_type) ? body.lease_type : 'residential';\nconst increaseAmt = proposedRent - currentRent;\nconst increasePct = currentRent > 0 ? parseFloat((increaseAmt / currentRent * 100).toFixed(1)) : 0;\nreturn [{ json: {\n  valid: true,\n  propertyAddress: body.property_address.trim(),\n  propertyType: body.property_type || '',\n  city: body.city || '',\n  currentRent,\n  proposedNewRent: proposedRent,\n  increaseAmount: parseFloat(increaseAmt.toFixed(2)),\n  increasePct,\n  currency: body.currency,\n  rentFrequency: body.rent_frequency || 'monthly',\n  leaseType,\n  tenantName: body.tenant_name || '',\n  currentLeaseTerm: body.current_lease_term || '',\n  leaseStartDate: body.lease_start_date || '',\n  renewalDeadline: body.renewal_deadline || '',\n  yearsAtProperty: parseFloat(body.years_at_property) || null,\n  targetRent: parseFloat(body.target_rent) || null,\n  marketDataProvided: (body.market_data || '').slice(0, 500),\n  propertyIssues: (body.property_issues || '').slice(0, 600),\n  tenantStrengths: (body.tenant_strengths || '').slice(0, 400),\n  landlordContext: (body.landlord_context || '').slice(0, 400),\n  negotiationStyle: body.negotiation_style || 'collaborative',\n  replyEmail: body.reply_email || null,\n  requestedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "p4s7v1y3-0002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cv",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "p4s7v1y3-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "p4s7v1y3-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.tavily.com/search",
+        "sendBody": true,
+        "specifyBody": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "api_key",
+              "value": "={{$env.TAVILY_API_KEY}}"
+            },
+            {
+              "name": "query",
+              "value": "={{ $json.city || $json.propertyAddress }} {{ $json.leaseType }} rental market rates {{ new Date().getFullYear() }} average rent increase"
+            },
+            {
+              "name": "search_depth",
+              "value": "basic"
+            },
+            {
+              "name": "max_results",
+              "value": 4
+            }
+          ]
+        }
+      },
+      "id": "p4s7v1y3-0005",
+      "name": "Research Rental Market",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        860,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const search = $('Research Rental Market').first().json;\nconst input = $('Validate Input').first().json;\nconst marketContext = (search.results||[]).map(r => `${r.title}: ${(r.content||r.snippet||'').slice(0,350)}`).join('\\n\\n');\nreturn [{ json: { input, marketContext: marketContext || 'No local market data found.' } }];"
+      },
+      "id": "p4s7v1y3-0006",
+      "name": "Merge Market Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1060,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.5,
+          "maxTokens": 2500
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are an experienced lease negotiation coach who has helped residential and commercial tenants navigate renewal negotiations. You give direct, practical advice grounded in real negotiating dynamics.\n\nYou understand:\n- Landlords want low vacancy and reliable tenants more than maximum rent\n- Long-term tenants have real leverage they often don't use\n- Maintenance issues and deferred repairs are negotiating chips\n- The cost of finding a new tenant (lost rent, repairs, advertising) is often more than the disputed increase amount\n- Written communication creates better outcomes than verbal discussions\n\nYou give specific numbers to ask for, exact language to use, and realistic expectations. You don't hedge everything.\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Give lease renewal negotiation coaching.\n\nProperty: {{ $json.input.propertyAddress }}{{ $json.input.city ? ', ' + $json.input.city : '' }}\nProperty type: {{ $json.input.propertyType || 'not specified' }}\nLease type: {{ $json.input.leaseType }}\n\nCurrent rent: {{ $json.input.currency }}{{ $json.input.currentRent }} {{ $json.input.rentFrequency }}\nProposed new rent: {{ $json.input.currency }}{{ $json.input.proposedNewRent }} {{ $json.input.rentFrequency }}\nIncrease: {{ $json.input.currency }}{{ $json.input.increaseAmount }} ({{ $json.input.increasePct }}%)\nTarget rent (if any): {{ $json.input.targetRent ? $json.input.currency + $json.input.targetRent : 'not specified' }}\n\nTenant name: {{ $json.input.tenantName || 'not provided' }}\nYears at property: {{ $json.input.yearsAtProperty || 'not specified' }}\nCurrent lease term: {{ $json.input.currentLeaseTerm || 'not specified' }}\nRenewal deadline: {{ $json.input.renewalDeadline || 'not specified' }}\n\nProperty issues / maintenance backlog: {{ $json.input.propertyIssues || 'none noted' }}\nTenant strengths: {{ $json.input.tenantStrengths || 'none specified' }}\nLandlord context: {{ $json.input.landlordContext || 'none provided' }}\nNegotiation style: {{ $json.input.negotiationStyle }}\nMarket data provided: {{ $json.input.marketDataProvided || 'none' }}\n\nRental market research:\n{{ $json.marketContext }}\n\nReturn this JSON:\n{\n  \"increase_assessment\": {\n    \"verdict\": \"one of: reasonable | above_market | significantly_above_market | needs_more_data\",\n    \"market_context\": \"what the market data suggests about this increase\",\n    \"typical_range\": \"typical renewal increase range for this area/type based on research\"\n  },\n  \"negotiation_strategy\": {\n    \"recommended_counter\": 0.0,\n    \"counter_rationale\": \"why this specific number \u2014 what it's based on\",\n    \"fallback_position\": 0.0,\n    \"walk_away_point\": \"at what rent level walking away makes more sense than renewing\",\n    \"leverage_points\": [\"specific things in this tenant's situation that give negotiating power\"],\n    \"weaknesses\": [\"factors that reduce negotiating leverage\"]\n  },\n  \"what_to_say\": {\n    \"opening_approach\": \"how to open the negotiation \u2014 tone, channel (email/call/letter), timing\",\n    \"email_subject\": \"subject line for the negotiation email\",\n    \"email_body\": \"complete email to send to the landlord \u2014 professional, specific, uses the leverage points\"\n  },\n  \"if_landlord_pushes_back\": [\n    {\n      \"scenario\": \"likely landlord response\",\n      \"response\": \"exactly what to say \u2014 specific words\"\n    }\n  ],\n  \"beyond_rent\": [\n    {\n      \"item\": \"non-rent concession worth negotiating\",\n      \"ask\": \"how to ask for it\",\n      \"value\": \"approximate value or benefit\"\n    }\n  ],\n  \"property_issues_as_leverage\": \"how to use any maintenance issues or deferred repairs in the negotiation \u2014 or null if none provided\",\n  \"long_term_tenant_argument\": \"the specific case for why keeping this tenant is worth accepting a lower increase \u2014 written as talking points\",\n  \"timing_advice\": \"when and how to respond \u2014 should they respond now or wait, what deadline to set\",\n  \"one_thing_not_to_do\": \"the most common mistake tenants make in this type of lease negotiation\"\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "p4s7v1y3-0007",
+      "name": "Claude Lease Coach",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        1280,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet coaching;\ntry { coaching = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst input = $('Validate Input').first().json;\ncoaching._meta = {\n  propertyAddress: input.propertyAddress,\n  currentRent: input.currentRent,\n  proposedNewRent: input.proposedNewRent,\n  increaseAmount: input.increaseAmount,\n  increasePct: input.increasePct,\n  currency: input.currency,\n  rentFrequency: input.rentFrequency,\n  leaseType: input.leaseType,\n  replyEmail: input.replyEmail\n};\nreturn [{ json: coaching }];"
+      },
+      "id": "p4s7v1y3-0008",
+      "name": "Parse Coaching",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const c = $input.first().json;\nconst m = c._meta;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nconst cur = m.currency;\nconst freq = m.rentFrequency;\n\nconst verdictConfig = {\n  reasonable:               {color:'#16a34a', bg:'#f0fdf4', label:'Reasonable increase'},\n  above_market:             {color:'#d97706', bg:'#fffbeb', label:'Above market'},\n  significantly_above_market:{color:'#dc2626', bg:'#fef2f2', label:'Significantly above market'},\n  needs_more_data:          {color:'#6b7280', bg:'#f9fafb', label:'Needs more data'}\n};\nconst vc = verdictConfig[c.increase_assessment?.verdict] || verdictConfig.needs_more_data;\nconst ns = c.negotiation_strategy;\n\nconst pushbackCards = (c.if_landlord_pushes_back||[]).map(p => `\n  <div style=\"border:1px solid #e5e7eb;border-radius:6px;margin-bottom:10px;overflow:hidden\">\n    <div style=\"background:#f9fafb;padding:8px 14px;font-size:13px;font-weight:600;color:#374151\">Landlord: \"${esc(p.scenario)}\"</div>\n    <div style=\"padding:10px 14px;font-size:14px;color:#1e40af;font-style:italic;line-height:1.6\">You: \"${esc(p.response)}\"</div>\n  </div>`).join('');\n\nconst beyondRent = (c.beyond_rent||[]).map(b => `\n  <div style=\"padding:9px 0;border-bottom:1px solid #f3f4f6\">\n    <div style=\"font-size:14px;font-weight:600\">${esc(b.item)}</div>\n    <div style=\"font-size:13px;color:#2563eb;margin-top:2px\">${esc(b.ask)}</div>\n    ${b.value ? `<div style=\"font-size:12px;color:#9ca3af;margin-top:1px\">${esc(b.value)}</div>` : ''}\n  </div>`).join('');\n\nconst leverageList = (ns?.leverage_points||[]).map(l => `<li style=\"font-size:13px;margin-bottom:5px;color:#166534\">${esc(l)}</li>`).join('');\nconst weaknessList = (ns?.weaknesses||[]).map(w => `<li style=\"font-size:13px;margin-bottom:5px;color:#7f1d1d\">${esc(w)}</li>`).join('');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f5f5f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111\">\n<div style=\"max-width:680px;margin:0 auto\">\n  <div style=\"background:#1c1917;color:#fff;padding:20px 28px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#78716c;margin-bottom:5px\">Lease Renewal Coach \u00b7 ${esc(m.leaseType)}</div>\n    <div style=\"font-size:18px;font-weight:700\">${esc(m.propertyAddress)}</div>\n    <div style=\"font-size:14px;color:#a8a29e;margin-top:3px\">${cur}${m.currentRent} \u2192 ${cur}${m.proposedNewRent} ${freq} (+${m.increasePct}%)</div>\n  </div>\n\n  <div style=\"background:${vc.bg};padding:14px 28px;border:1px solid ${vc.color}44;border-top:none\">\n    <div style=\"display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px\">\n      <div>\n        <span style=\"background:${vc.color};color:#fff;font-size:12px;font-weight:700;padding:3px 10px;border-radius:12px\">${vc.label}</span>\n        <div style=\"font-size:13px;color:#555;margin-top:6px;line-height:1.5\">${esc(c.increase_assessment?.market_context)}</div>\n        <div style=\"font-size:12px;color:#9ca3af;margin-top:3px\">Typical range: ${esc(c.increase_assessment?.typical_range||'see market data')}</div>\n      </div>\n      ${ns?.recommended_counter ? `<div style=\"text-align:right\">\n        <div style=\"font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.4px\">Counter ask</div>\n        <div style=\"font-size:26px;font-weight:800;color:#1a1a1a\">${cur}${ns.recommended_counter.toLocaleString()}</div>\n        <div style=\"font-size:12px;color:#6b7280\">Fallback: ${cur}${(ns.fallback_position||0).toLocaleString()}</div>\n      </div>` : ''}\n    </div>\n  </div>\n\n  ${ns ? `<div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:8px\">Strategy</div>\n    <p style=\"font-size:14px;line-height:1.65;color:#374151;margin:0 0 10px\">${esc(ns.counter_rationale)}</p>\n    ${ns.walk_away_point ? `<div style=\"font-size:13px;color:#dc2626;background:#fef2f2;padding:8px 12px;border-radius:4px\">Walk away if: ${esc(ns.walk_away_point)}</div>` : ''}\n  </div>` : ''}\n\n  <div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\">\n    <div style=\"display:grid;grid-template-columns:1fr 1fr;gap:16px\">\n      ${leverageList ? `<div><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#15803d;margin-bottom:7px\">Your leverage</div><ul style=\"padding-left:16px;margin:0\">${leverageList}</ul></div>` : ''}\n      ${weaknessList ? `<div><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#b91c1c;margin-bottom:7px\">Watch out for</div><ul style=\"padding-left:16px;margin:0\">${weaknessList}</ul></div>` : ''}\n    </div>\n  </div>\n\n  <div style=\"background:#eff6ff;padding:16px 28px;border:1px solid #bfdbfe\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#1d4ed8;margin-bottom:5px\">Opening approach</div>\n    <div style=\"font-size:14px;color:#1e3a8a;line-height:1.65;margin-bottom:10px\">${esc(c.what_to_say?.opening_approach)}</div>\n    ${c.what_to_say?.email_subject ? `<div style=\"font-size:12px;color:#3b82f6;margin-bottom:4px\"><strong>Subject:</strong> ${esc(c.what_to_say.email_subject)}</div>` : ''}\n    ${c.what_to_say?.email_body ? `<div style=\"background:#fff;border:1px solid #bfdbfe;border-radius:6px;padding:14px;font-size:14px;line-height:1.75;white-space:pre-wrap;color:#374151\">${esc(c.what_to_say.email_body)}</div>` : ''}\n  </div>\n\n  ${pushbackCards ? `<div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:10px\">When they push back</div>\n    ${pushbackCards}\n  </div>` : ''}\n\n  ${c.long_term_tenant_argument ? `<div style=\"background:#f0fdf4;padding:14px 28px;border:1px solid #bbf7d0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#15803d;margin-bottom:6px\">Your case as a long-term tenant</div>\n    <div style=\"font-size:14px;color:#166534;line-height:1.65\">${esc(c.long_term_tenant_argument)}</div>\n  </div>` : ''}\n\n  ${c.property_issues_as_leverage ? `<div style=\"background:#fffbeb;padding:14px 28px;border:1px solid #fde68a\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#92400e;margin-bottom:6px\">Property issues as leverage</div>\n    <div style=\"font-size:14px;color:#78350f;line-height:1.65\">${esc(c.property_issues_as_leverage)}</div>\n  </div>` : ''}\n\n  ${beyondRent ? `<div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:10px\">If rent is stuck \u2014 negotiate these</div>\n    ${beyondRent}\n  </div>` : ''}\n\n  <div style=\"background:#fff;padding:14px 28px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:6px\">Timing</div>\n    <div style=\"font-size:14px;color:#374151;line-height:1.6\">${esc(c.timing_advice)}</div>\n  </div>\n\n  ${c.one_thing_not_to_do ? `<div style=\"background:#fef2f2;padding:12px 28px;border:1px solid #fecaca\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#b91c1c;margin-bottom:4px\">Don't do this</div>\n    <div style=\"font-size:14px;color:#7f1d1d;line-height:1.6\">${esc(c.one_thing_not_to_do)}</div>\n  </div>` : ''}\n\n  <div style=\"background:#1c1917;color:#57534e;font-size:11px;padding:12px 28px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Lease Renewal Coach \u00b7 ${new Date().toLocaleDateString()}\n  </div>\n</div></body></html>`;\n\nreturn [{ json: { html, replyEmail: m.replyEmail, propertyAddress: m.propertyAddress, increasePct: m.increasePct, counterRent: ns?.recommended_counter || null, currency: cur, coaching: c } }];"
+      },
+      "id": "p4s7v1y3-0009",
+      "name": "Build Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1720,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "ce",
+              "leftValue": "={{ $json.replyEmail }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "p4s7v1y3-0010",
+      "name": "Has Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1940,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.replyEmail}}",
+        "subject": "Lease negotiation: {{ $json.propertyAddress }} \u2014 +{{ $json.increasePct }}% increase{{ $json.counterRent ? ' \u00b7 Counter: ' + $json.currency + $json.counterRent : '' }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "p4s7v1y3-0011",
+      "name": "Email Coaching",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2160,
+        260
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'coached', property: $json.propertyAddress, increase_pct: $json.increasePct, counter_rent: $json.counterRent, currency: $json.currency, emailed: $json.replyEmail ? true : false, coaching: $json.coaching } }}"
+      },
+      "id": "p4s7v1y3-0012",
+      "name": "Return Coaching",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2380,
+        320
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook \u2013 Submit Lease": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Research Rental Market",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Research Rental Market": {
+      "main": [
+        [
+          {
+            "node": "Merge Market Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Market Data": {
+      "main": [
+        [
+          {
+            "node": "Claude Lease Coach",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Lease Coach": {
+      "main": [
+        [
+          {
+            "node": "Parse Coaching",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Coaching": {
+      "main": [
+        [
+          {
+            "node": "Build Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Report": {
+      "main": [
+        [
+          {
+            "node": "Has Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Email?": {
+      "main": [
+        [
+          {
+            "node": "Email Coaching",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Coaching",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Coaching": {
+      "main": [
+        [
+          {
+            "node": "Return Coaching",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    "real-estate",
+    "negotiation",
+    "tenants",
+    "lease"
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-11T11:00:00.000Z",
+  "versionId": "v1.0.0"
+}
