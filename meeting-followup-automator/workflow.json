@@ -1,0 +1,378 @@
+{
+  "name": "Meeting Follow-Up Automator",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "meeting-followup",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "r6u9x3a5-0001",
+      "name": "Webhook \u2013 Submit Meeting",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['meeting_title', 'raw_notes', 'attendees'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nif (body.raw_notes.trim().length < 50) return [{ json: { valid: false, error: 'raw_notes too short \u2014 need at least 50 characters' } }];\n\nconst attendees = Array.isArray(body.attendees)\n  ? body.attendees\n  : body.attendees.split(',').map(a => a.trim()).filter(Boolean);\n\nconst meetingTypes = ['client_meeting', 'internal_team', 'sales_call', 'project_kickoff', 'board_meeting', 'one_on_one', 'discovery_call', 'retrospective', 'planning', 'interview', 'other'];\nconst meetingType = meetingTypes.includes(body.meeting_type) ? body.meeting_type : 'other';\n\nreturn [{ json: {\n  valid: true,\n  meetingTitle: body.meeting_title.trim(),\n  meetingType,\n  meetingDate: body.meeting_date || new Date().toISOString().split('T')[0],\n  rawNotes: body.raw_notes.trim().slice(0, 6000),\n  attendees,\n  organizer: body.organizer || attendees[0] || '',\n  organizerEmail: body.organizer_email || '',\n  sendFollowUpEmail: body.send_follow_up_email !== false,\n  followUpRecipients: Array.isArray(body.follow_up_recipients)\n    ? body.follow_up_recipients\n    : (body.follow_up_recipients || '').split(',').map(e => e.trim()).filter(Boolean),\n  company: body.company || '',\n  projectName: body.project_name || '',\n  nextMeetingDate: body.next_meeting_date || '',\n  tone: body.tone || 'professional',\n  replyEmail: body.reply_email || null,\n  requestedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "r6u9x3a5-0002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cv",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "r6u9x3a5-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "r6u9x3a5-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.45,
+          "maxTokens": 2500
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You process raw meeting notes into structured follow-up materials. You extract what was actually decided and what needs to happen, then write a professional follow-up email that can go out immediately.\n\nGood meeting follow-ups:\n- Are sent the same day or next morning while context is fresh\n- Lead with decisions made, not a recap of discussion\n- Assign specific owners to each action item with a deadline\n- Are scannable \u2014 people open them on their phone\n- Don't over-summarize \u2014 people were there, they don't need a transcript\n\nYou calibrate tone to the meeting type. A board meeting follow-up reads differently from a casual team retro.\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Process these meeting notes and generate follow-up materials.\n\nMeeting: {{ $json.meetingTitle }}\nType: {{ $json.meetingType.replace(/_/g,' ') }}\nDate: {{ $json.meetingDate }}\nAttendees: {{ $json.attendees.join(', ') }}\nOrganizer: {{ $json.organizer || 'not specified' }}\nCompany/project: {{ $json.company || $json.projectName || 'not specified' }}\nNext meeting: {{ $json.nextMeetingDate || 'not scheduled' }}\nTone: {{ $json.tone }}\n\nRaw notes:\n{{ $json.rawNotes }}\n\nReturn this JSON:\n{\n  \"meeting_summary\": \"2-3 sentence executive summary of what was covered and the overall outcome\",\n  \"decisions_made\": [\n    {\n      \"decision\": \"specific decision that was made\",\n      \"context\": \"brief rationale or context if relevant\",\n      \"made_by\": \"person who made the call or 'group'\"\n    }\n  ],\n  \"action_items\": [\n    {\n      \"task\": \"specific actionable task \u2014 starts with a verb\",\n      \"owner\": \"person responsible \u2014 use names from attendees list\",\n      \"due_date\": \"specific date or 'by next meeting' or 'ASAP'\",\n      \"priority\": \"high | medium | low\",\n      \"notes\": \"any relevant detail or dependency\"\n    }\n  ],\n  \"open_questions\": [\n    {\n      \"question\": \"unresolved question that needs an answer\",\n      \"needs_input_from\": \"person or team who can answer this\"\n    }\n  ],\n  \"key_topics_discussed\": [\"3-5 topics covered \u2014 brief phrases, not sentences\"],\n  \"blockers_identified\": [\"any blockers or risks mentioned \u2014 empty if none\"],\n  \"follow_up_email\": {\n    \"subject\": \"email subject line \u2014 specific, not generic\",\n    \"body\": \"complete follow-up email body \u2014 professional, scannable, uses bullet points for action items. Sign off with the organizer's name. Under 300 words.\"\n  },\n  \"next_meeting_agenda_suggestions\": [\"2-4 agenda items that logically follow from what was discussed today\"]\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "r6u9x3a5-0005",
+      "name": "Claude Meeting Processor",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        860,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet processed;\ntry { processed = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst input = $('Validate Input').first().json;\nprocessed._meta = {\n  meetingTitle: input.meetingTitle,\n  meetingType: input.meetingType,\n  meetingDate: input.meetingDate,\n  attendees: input.attendees,\n  organizer: input.organizer,\n  organizerEmail: input.organizerEmail,\n  followUpRecipients: input.followUpRecipients,\n  sendFollowUpEmail: input.sendFollowUpEmail,\n  company: input.company,\n  projectName: input.projectName,\n  nextMeetingDate: input.nextMeetingDate,\n  replyEmail: input.replyEmail\n};\nreturn [{ json: processed }];"
+      },
+      "id": "r6u9x3a5-0006",
+      "name": "Parse Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $input.first().json;\nconst m = p._meta;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst priorityColor = {high:'#dc2626', medium:'#d97706', low:'#6b7280'};\nconst actionRows = (p.action_items||[]).map(a => `\n  <tr style=\"border-bottom:1px solid #f3f4f6\">\n    <td style=\"padding:9px 12px;font-size:14px\">${esc(a.task)}</td>\n    <td style=\"padding:9px 12px;font-size:13px;font-weight:600;color:#374151\">${esc(a.owner||'TBD')}</td>\n    <td style=\"padding:9px 12px;font-size:13px;color:#6b7280\">${esc(a.due_date||'')}</td>\n    <td style=\"padding:9px 12px;text-align:center\"><span style=\"background:${priorityColor[a.priority]||'#6b7280'}22;color:${priorityColor[a.priority]||'#6b7280'};font-size:11px;font-weight:700;padding:2px 8px;border-radius:8px\">${esc(a.priority||'')}</span></td>\n  </tr>`).join('');\n\nconst decisionRows = (p.decisions_made||[]).map(d => `\n  <div style=\"padding:9px 0;border-bottom:1px solid #f0fdf4\">\n    <div style=\"font-size:14px;font-weight:600;color:#166534\">\u2713 ${esc(d.decision)}</div>\n    ${d.context ? `<div style=\"font-size:13px;color:#6b7280;margin-top:2px\">${esc(d.context)}</div>` : ''}\n  </div>`).join('');\n\nconst openQs = (p.open_questions||[]).map(q => `\n  <div style=\"padding:9px 0;border-bottom:1px solid #f0f9ff\">\n    <div style=\"font-size:14px;color:#1e40af\">? ${esc(q.question)}</div>\n    ${q.needs_input_from ? `<div style=\"font-size:12px;color:#9ca3af;margin-top:2px\">Needs: ${esc(q.needs_input_from)}</div>` : ''}\n  </div>`).join('');\n\nconst blockerList = (p.blockers_identified||[]).map(b => `<div style=\"font-size:13px;color:#7f1d1d;padding:5px 0\">\u26a0 ${esc(b)}</div>`).join('');\nconst topicTags = (p.key_topics_discussed||[]).map(t => `<span style=\"display:inline-block;background:#f3f4f6;color:#374151;font-size:12px;padding:3px 10px;border-radius:12px;margin:3px 3px 0 0\">${esc(t)}</span>`).join('');\nconst agendaSugg = (p.next_meeting_agenda_suggestions||[]).map((a,i) => `<div style=\"font-size:13px;color:#374151;padding:5px 0;border-bottom:1px solid #f3f4f6\">${i+1}. ${esc(a)}</div>`).join('');\n\nconst emailBodyHtml = (p.follow_up_email?.body||'').replace(/\\n/g,'<br>').replace(/\\*\\*(.+?)\\*\\*/g,'<strong>$1</strong>');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f9fafb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111\">\n<div style=\"max-width:720px;margin:0 auto\">\n  <div style=\"background:#1e293b;color:#fff;padding:20px 28px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#64748b;margin-bottom:5px\">${esc(m.meetingType.replace(/_/g,' '))} \u00b7 ${esc(m.meetingDate)}</div>\n    <div style=\"font-size:19px;font-weight:700\">${esc(m.meetingTitle)}</div>\n    <div style=\"font-size:13px;color:#94a3b8;margin-top:4px\">${esc(m.attendees.join(' \u00b7 '))}</div>\n  </div>\n\n  <div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:none\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:6px\">Summary</div>\n    <p style=\"font-size:15px;line-height:1.7;color:#374151;margin:0 0 10px\">${esc(p.meeting_summary)}</p>\n    ${topicTags ? `<div style=\"margin-top:8px\">${topicTags}</div>` : ''}\n  </div>\n\n  ${decisionRows ? `<div style=\"background:#f0fdf4;padding:16px 28px;border:1px solid #bbf7d0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#15803d;margin-bottom:8px\">Decisions made</div>\n    ${decisionRows}\n  </div>` : ''}\n\n  ${actionRows ? `<div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:10px\">Action items</div>\n    <table style=\"width:100%;border-collapse:collapse\">\n      <thead><tr style=\"font-size:11px;text-transform:uppercase;color:#9ca3af\">\n        <th style=\"padding:7px 12px;text-align:left\">Task</th>\n        <th style=\"padding:7px 12px;text-align:left\">Owner</th>\n        <th style=\"padding:7px 12px;text-align:left\">Due</th>\n        <th style=\"padding:7px 12px;text-align:center\">Priority</th>\n      </tr></thead>\n      <tbody>${actionRows}</tbody>\n    </table>\n  </div>` : ''}\n\n  ${openQs ? `<div style=\"background:#eff6ff;padding:14px 28px;border:1px solid #bfdbfe\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#1d4ed8;margin-bottom:8px\">Open questions</div>\n    ${openQs}\n  </div>` : ''}\n\n  ${blockerList ? `<div style=\"background:#fef2f2;padding:12px 28px;border:1px solid #fecaca\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#b91c1c;margin-bottom:6px\">Blockers</div>\n    ${blockerList}\n  </div>` : ''}\n\n  <div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:6px\">Follow-up email draft</div>\n    <div style=\"font-size:12px;color:#6b7280;margin-bottom:6px\"><strong>Subject:</strong> ${esc(p.follow_up_email?.subject||'')}</div>\n    <div style=\"background:#f8faff;border:1px solid #e0e7ff;border-radius:6px;padding:14px;font-size:14px;line-height:1.75;color:#374151\">${emailBodyHtml}</div>\n  </div>\n\n  ${agendaSugg ? `<div style=\"background:#fff;padding:14px 28px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:7px\">Next meeting agenda ideas</div>\n    ${agendaSugg}\n  </div>` : ''}\n\n  <div style=\"background:#1e293b;color:#475569;font-size:11px;padding:12px 28px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Meeting Follow-Up \u00b7 ${esc(m.meetingDate)} \u00b7 ${esc(m.meetingTitle)}\n  </div>\n</div></body></html>`;\n\nreturn [{ json: { html, replyEmail: m.replyEmail, followUpEmail: p.follow_up_email, followUpRecipients: m.followUpRecipients, sendFollowUpEmail: m.sendFollowUpEmail, meetingTitle: m.meetingTitle, organizerEmail: m.organizerEmail, processed: p } }];"
+      },
+      "id": "r6u9x3a5-0007",
+      "name": "Build Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "csf",
+              "leftValue": "={{ $json.sendFollowUpEmail }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "r6u9x3a5-0008",
+      "name": "Send Follow-Up?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $json.organizerEmail || $env.FROM_EMAIL }}",
+        "toEmail": "={{ $json.followUpRecipients.length > 0 ? $json.followUpRecipients.join(',') : $json.replyEmail }}",
+        "subject": "={{ $json.followUpEmail.subject }}",
+        "emailType": "text",
+        "message": "={{ $json.followUpEmail.body }}"
+      },
+      "id": "r6u9x3a5-0009",
+      "name": "Send Follow-Up Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1740,
+        160
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cre",
+              "leftValue": "={{ $json.replyEmail || '' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "r6u9x3a5-0010",
+      "name": "Send Report?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1740,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.replyEmail}}",
+        "subject": "Meeting summary: {{ $json.meetingTitle }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "r6u9x3a5-0011",
+      "name": "Email Full Report",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1960,
+        340
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'processed', meeting: $json.meetingTitle, action_items: ($json.processed?.action_items||[]).length, decisions: ($json.processed?.decisions_made||[]).length, follow_up_sent: $json.sendFollowUpEmail, summary: $json.processed } }}"
+      },
+      "id": "r6u9x3a5-0012",
+      "name": "Return Result",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2180,
+        240
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook \u2013 Submit Meeting": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Claude Meeting Processor",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Meeting Processor": {
+      "main": [
+        [
+          {
+            "node": "Parse Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Output": {
+      "main": [
+        [
+          {
+            "node": "Build Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Report": {
+      "main": [
+        [
+          {
+            "node": "Send Follow-Up?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Report?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Follow-Up?": {
+      "main": [
+        [
+          {
+            "node": "Send Follow-Up Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Follow-Up Email": {
+      "main": [
+        [
+          {
+            "node": "Return Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Report?": {
+      "main": [
+        [
+          {
+            "node": "Email Full Report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    "meetings",
+    "productivity",
+    "async",
+    "documentation"
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-12T09:00:00.000Z",
+  "versionId": "v1.0.0"
+}

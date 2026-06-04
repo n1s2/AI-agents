@@ -1,0 +1,425 @@
+{
+  "name": "Competitor Price Tracker Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 7,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "q5t8w2z4-0001",
+      "name": "Daily 7am Scan",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        200,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "track-prices",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "q5t8w2z4-0002",
+      "name": "Webhook \u2013 Manual Scan",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.PRICE_SHEET_ID}}",
+        "sheetName": "Competitors",
+        "options": {}
+      },
+      "id": "q5t8w2z4-0003",
+      "name": "Load Competitor List",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        420,
+        260
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(r => r.json).filter(r => r.competitor_name && r.enabled !== 'FALSE');\nreturn rows.map(r => ({ json: {\n  competitorName: r.competitor_name.trim(),\n  productName: r.product_name || '',\n  searchQuery: r.search_query || `${r.competitor_name} ${r.product_name} price`,\n  ourPrice: parseFloat(r.our_price) || null,\n  currency: r.currency || 'USD',\n  category: r.category || '',\n  alertEmail: r.alert_email || '',\n  priceDropThreshold: parseFloat(r.price_drop_threshold_pct) || 10,\n  lastKnownPrice: parseFloat(r.last_known_price) || null,\n  lastChecked: r.last_checked || ''\n} }));"
+      },
+      "id": "q5t8w2z4-0004",
+      "name": "Parse Competitors",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "q5t8w2z4-0005",
+      "name": "Loop Each Competitor",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        860,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.tavily.com/search",
+        "sendBody": true,
+        "specifyBody": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "api_key",
+              "value": "={{$env.TAVILY_API_KEY}}"
+            },
+            {
+              "name": "query",
+              "value": "={{ $json.searchQuery }}"
+            },
+            {
+              "name": "search_depth",
+              "value": "basic"
+            },
+            {
+              "name": "max_results",
+              "value": 5
+            },
+            {
+              "name": "days",
+              "value": 3
+            }
+          ]
+        }
+      },
+      "id": "q5t8w2z4-0006",
+      "name": "Search Pricing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1060,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const competitor = $('Loop Each Competitor').first().json;\nconst results = $input.first().json?.results || [];\nconst now = new Date().toISOString();\n\n// Extract price mentions from results\nconst pricePatterns = [\n  /\\$([\\d,]+(?:\\.\\d{1,2})?)/g,\n  /USD\\s*([\\d,]+(?:\\.\\d{1,2})?)/gi,\n  /\u00a3([\\d,]+(?:\\.\\d{1,2})?)/g,\n  /\u20ac([\\d,]+(?:\\.\\d{1,2})?)/g,\n  /([\\d,]+(?:\\.\\d{1,2})?)\\s*(?:per month|\\/mo|\\/month)/gi\n];\n\nconst extractedPrices = [];\nfor (const result of results) {\n  const text = `${result.title} ${result.content || result.snippet || ''}`;\n  for (const pattern of pricePatterns) {\n    let match;\n    pattern.lastIndex = 0;\n    while ((match = pattern.exec(text)) !== null) {\n      const price = parseFloat(match[1].replace(/,/g, ''));\n      if (price > 0 && price < 100000) extractedPrices.push(price);\n    }\n  }\n}\n\n// Find the most likely current price (median of reasonable prices)\nconst sorted = extractedPrices.sort((a,b) => a-b);\nconst estimatedPrice = sorted.length > 0 ? sorted[Math.floor(sorted.length/2)] : null;\n\n// Compare with our price and last known price\nconst ourPrice = competitor.ourPrice;\nconst lastKnown = competitor.lastKnownPrice;\nconst priceDropThreshold = competitor.priceDropThreshold;\n\nlet priceChange = null;\nlet priceChangePct = null;\nlet isSignificantDrop = false;\n\nif (estimatedPrice && lastKnown) {\n  priceChange = parseFloat((estimatedPrice - lastKnown).toFixed(2));\n  priceChangePct = parseFloat(((priceChange / lastKnown) * 100).toFixed(1));\n  isSignificantDrop = priceChangePct <= -priceDropThreshold;\n}\n\nconst vsOurs = ourPrice && estimatedPrice\n  ? parseFloat((((estimatedPrice - ourPrice) / ourPrice) * 100).toFixed(1))\n  : null;\n\nconst topSources = results.slice(0,3).map(r => ({ title: r.title, url: r.url, snippet: (r.content||r.snippet||'').slice(0,200) }));\n\nreturn [{ json: {\n  competitor,\n  estimatedPrice,\n  extractedPrices: extractedPrices.slice(0,10),\n  priceChange,\n  priceChangePct,\n  isSignificantDrop,\n  vsOurs,\n  topSources,\n  checkedAt: now\n} }];"
+      },
+      "id": "q5t8w2z4-0007",
+      "name": "Extract Prices",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.PRICE_SHEET_ID}}",
+        "sheetName": "Price History",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "checked_at": "={{ $json.checkedAt }}",
+            "competitor_name": "={{ $json.competitor.competitorName }}",
+            "product_name": "={{ $json.competitor.productName }}",
+            "estimated_price": "={{ $json.estimatedPrice }}",
+            "price_change": "={{ $json.priceChange }}",
+            "price_change_pct": "={{ $json.priceChangePct }}",
+            "vs_our_price_pct": "={{ $json.vsOurs }}",
+            "significant_drop": "={{ $json.isSignificantDrop }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "q5t8w2z4-0008",
+      "name": "Log Price History",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        1500,
+        180
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": "={{$env.PRICE_SHEET_ID}}",
+        "sheetName": "Competitors",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "competitor_name": "={{ $json.competitor.competitorName }}",
+            "last_known_price": "={{ $json.estimatedPrice || $json.competitor.lastKnownPrice }}",
+            "last_checked": "={{ $json.checkedAt }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "q5t8w2z4-0009",
+      "name": "Update Last Known",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        1500,
+        320
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "csd",
+              "leftValue": "={{ $json.isSignificantDrop }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "q5t8w2z4-0010",
+      "name": "Significant Drop?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1720,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{ $json.competitor.alertEmail || $env.DEFAULT_ALERT_EMAIL }}",
+        "subject": "\u26a1 Price drop: {{ $json.competitor.competitorName }} \u2014 {{ $json.priceChangePct }}% decrease on {{ $json.competitor.productName || 'product' }}",
+        "emailType": "html",
+        "message": "<!DOCTYPE html><html><body style='font-family:sans-serif;max-width:560px;margin:0 auto;padding:16px'><div style='background:#1a1a2e;color:#fff;padding:14px 20px;border-radius:6px 6px 0 0'><h2 style='margin:0'>\u26a1 Competitor Price Drop Alert</h2></div><div style='background:#fff;border:1px solid #e5e7eb;padding:18px 20px;font-size:14px;line-height:1.7'><p><strong>Competitor:</strong> {{ $json.competitor.competitorName }}</p><p><strong>Product:</strong> {{ $json.competitor.productName || 'not specified' }}</p><p><strong>Previous price:</strong> {{ $json.competitor.currency }}{{ $json.competitor.lastKnownPrice }}</p><p><strong>New estimated price:</strong> {{ $json.competitor.currency }}{{ $json.estimatedPrice }}</p><p><strong>Change:</strong> {{ $json.priceChangePct }}% ({{ $json.competitor.currency }}{{ $json.priceChange }})</p><p><strong>vs. Our price:</strong> {{ $json.vsOurs !== null ? $json.vsOurs + '%' : 'N/A' }}</p><p><strong>Detected:</strong> {{ $json.checkedAt }}</p><p><strong>Sources:</strong><br>{{ $json.topSources.map(s => s.title + ': ' + s.url).join('<br>') }}</p></div></body></html>"
+      },
+      "id": "q5t8w2z4-0011",
+      "name": "Send Drop Alert",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1940,
+        180
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nreturn [{ json: { manualTrigger: true, filter: body.competitor_name || null } }];"
+      },
+      "id": "q5t8w2z4-0012",
+      "name": "Parse Manual",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'scanned', competitors_checked: $('Parse Competitors').all().length, scan_date: new Date().toISOString().split('T')[0] } }}"
+      },
+      "id": "q5t8w2z4-0013",
+      "name": "Return Scan Result",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1940,
+        480
+      ]
+    }
+  ],
+  "connections": {
+    "Daily 7am Scan": {
+      "main": [
+        [
+          {
+            "node": "Load Competitor List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Competitor List": {
+      "main": [
+        [
+          {
+            "node": "Parse Competitors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Competitors": {
+      "main": [
+        [
+          {
+            "node": "Loop Each Competitor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Each Competitor": {
+      "main": [
+        [
+          {
+            "node": "Search Pricing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Pricing": {
+      "main": [
+        [
+          {
+            "node": "Extract Prices",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Prices": {
+      "main": [
+        [
+          {
+            "node": "Log Price History",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Update Last Known",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Significant Drop?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Significant Drop?": {
+      "main": [
+        [
+          {
+            "node": "Send Drop Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Webhook \u2013 Manual Scan": {
+      "main": [
+        [
+          {
+            "node": "Parse Manual",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Manual": {
+      "main": [
+        [
+          {
+            "node": "Load Competitor List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Drop Alert": {
+      "main": [
+        [
+          {
+            "node": "Return Scan Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    "pricing",
+    "competitive-intelligence",
+    "ecommerce",
+    "monitoring"
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2025-05-12T07:00:00.000Z",
+  "versionId": "v1.0.0"
+}

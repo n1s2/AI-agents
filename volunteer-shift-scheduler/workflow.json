@@ -1,0 +1,589 @@
+{
+  "name": "Volunteer Shift Scheduler Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "volunteer-availability",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "s7v1y4b6-0001",
+      "name": "Webhook \u2013 Submit Availability",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "generate-schedule",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "s7v1y4b6-0002",
+      "name": "Webhook \u2013 Generate Schedule",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['volunteer_name', 'volunteer_email', 'available_dates'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nconst dates = Array.isArray(body.available_dates) ? body.available_dates : body.available_dates.split(',').map(d => d.trim());\nif (dates.length === 0) return [{ json: { valid: false, error: 'available_dates must not be empty' } }];\nreturn [{ json: {\n  valid: true,\n  volunteerId: body.volunteer_id || `V-${Date.now()}`,\n  volunteerName: body.volunteer_name.trim(),\n  volunteerEmail: body.volunteer_email.trim(),\n  volunteerPhone: body.volunteer_phone || '',\n  role: body.role || 'general',\n  skills: Array.isArray(body.skills) ? body.skills : (body.skills || '').split(',').map(s => s.trim()).filter(Boolean),\n  availableDates: dates,\n  preferredShifts: Array.isArray(body.preferred_shifts) ? body.preferred_shifts : (body.preferred_shifts || '').split(',').map(s => s.trim()).filter(Boolean),\n  maxShiftsPerWeek: parseInt(body.max_shifts_per_week) || 3,\n  notes: (body.notes || '').slice(0, 300),\n  submittedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "s7v1y4b6-0003",
+      "name": "Validate Availability",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cv1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "s7v1y4b6-0004",
+      "name": "Avail Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "s7v1y4b6-0005",
+      "name": "Return Avail Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.VOLUNTEER_SHEET_ID}}",
+        "sheetName": "Availability",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "volunteer_id": "={{ $json.volunteerId }}",
+            "volunteer_name": "={{ $json.volunteerName }}",
+            "volunteer_email": "={{ $json.volunteerEmail }}",
+            "volunteer_phone": "={{ $json.volunteerPhone }}",
+            "role": "={{ $json.role }}",
+            "skills": "={{ $json.skills.join(', ') }}",
+            "available_dates": "={{ $json.availableDates.join(', ') }}",
+            "preferred_shifts": "={{ $json.preferredShifts.join(', ') }}",
+            "max_shifts_per_week": "={{ $json.maxShiftsPerWeek }}",
+            "notes": "={{ $json.notes }}",
+            "submitted_at": "={{ $json.submittedAt }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "s7v1y4b6-0006",
+      "name": "Save Availability",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        860,
+        220
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{ $json.volunteerEmail }}",
+        "subject": "Availability confirmed \u2014 {{ $json.volunteerName }}",
+        "emailType": "text",
+        "message": "Hi {{ $json.volunteerName }},\n\nThank you \u2014 we've received your availability.\n\nDates submitted: {{ $json.availableDates.join(', ') }}\nRole: {{ $json.role }}\nMax shifts per week: {{ $json.maxShiftsPerWeek }}\n\nYou'll receive your schedule once it's been generated. If you need to update your availability, just resubmit.\n\nThank you for volunteering!"
+      },
+      "id": "s7v1y4b6-0007",
+      "name": "Confirm to Volunteer",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1080,
+        220
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'received', volunteer_id: $json.volunteerId, name: $json.volunteerName, dates_submitted: $json.availableDates.length } }}"
+      },
+      "id": "s7v1y4b6-0008",
+      "name": "Return Avail Confirmation",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1300,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['event_name', 'shifts'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nif (!Array.isArray(body.shifts) || body.shifts.length === 0) return [{ json: { valid: false, error: 'shifts must be a non-empty array' } }];\nreturn [{ json: {\n  valid: true,\n  eventName: body.event_name.trim(),\n  eventDescription: (body.event_description || '').slice(0, 400),\n  shifts: body.shifts.map(s => ({\n    shiftId: s.shift_id || `S-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,\n    date: s.date,\n    startTime: s.start_time,\n    endTime: s.end_time,\n    role: s.role || 'general',\n    volunteersNeeded: parseInt(s.volunteers_needed) || 1,\n    requiredSkills: Array.isArray(s.required_skills) ? s.required_skills : (s.required_skills || '').split(',').map(x=>x.trim()).filter(Boolean),\n    location: s.location || '',\n    notes: s.notes || ''\n  })),\n  notifyVolunteers: body.notify_volunteers !== false,\n  coordinatorEmail: body.coordinator_email || '',\n  replyEmail: body.reply_email || null,\n  requestedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "s7v1y4b6-0009",
+      "name": "Validate Schedule Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cv2",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "s7v1y4b6-0010",
+      "name": "Sched Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "s7v1y4b6-0011",
+      "name": "Return Sched Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.VOLUNTEER_SHEET_ID}}",
+        "sheetName": "Availability",
+        "options": {}
+      },
+      "id": "s7v1y4b6-0012",
+      "name": "Load All Availability",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        860,
+        500
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const volunteers = $('Load All Availability').all().map(r => r.json).filter(r => r.volunteer_name);\nconst schedReq = $('Validate Schedule Request').first().json;\n\n// Parse availability\nconst parsed = volunteers.map(v => ({\n  id: v.volunteer_id,\n  name: v.volunteer_name,\n  email: v.volunteer_email,\n  role: v.role || 'general',\n  skills: (v.skills || '').split(',').map(s => s.trim()).filter(Boolean),\n  availableDates: (v.available_dates || '').split(',').map(d => d.trim()).filter(Boolean),\n  preferredShifts: (v.preferred_shifts || '').split(',').map(s => s.trim()).filter(Boolean),\n  maxShifts: parseInt(v.max_shifts_per_week) || 3,\n  notes: v.notes || '',\n  assignedCount: 0\n}));\n\n// Match volunteers to shifts\nconst assignments = [];\nconst unfilledShifts = [];\nconst shiftAssignments = {};\n\nfor (const shift of schedReq.shifts) {\n  const eligible = parsed.filter(v => {\n    const dateMatch = v.availableDates.some(d => d.includes(shift.date) || shift.date.includes(d));\n    const roleMatch = !shift.role || shift.role === 'general' || v.role === shift.role || v.role === 'general';\n    const skillsMatch = shift.requiredSkills.length === 0 || shift.requiredSkills.every(s => v.skills.map(sk=>sk.toLowerCase()).includes(s.toLowerCase()));\n    const notOverloaded = v.assignedCount < v.maxShifts;\n    return dateMatch && roleMatch && skillsMatch && notOverloaded;\n  });\n\n  const selected = eligible.slice(0, shift.volunteersNeeded);\n  selected.forEach(v => { v.assignedCount++; });\n\n  shiftAssignments[shift.shiftId] = selected.map(v => ({ id: v.id, name: v.name, email: v.email, role: v.role }));\n\n  assignments.push({\n    shift,\n    assigned: selected.map(v => ({ id: v.id, name: v.name, email: v.email, role: v.role })),\n    filled: selected.length,\n    needed: shift.volunteersNeeded,\n    fullyStaffed: selected.length >= shift.volunteersNeeded\n  });\n\n  if (selected.length < shift.volunteersNeeded) {\n    unfilledShifts.push({ ...shift, filled: selected.length, needed: shift.volunteersNeeded });\n  }\n}\n\nconst totalVolunteers = parsed.length;\nconst assignedVolunteers = parsed.filter(v => v.assignedCount > 0).length;\nconst fullyStaffedCount = assignments.filter(a => a.fullyStaffed).length;\n\nreturn [{ json: {\n  schedReq,\n  assignments,\n  unfilledShifts,\n  stats: { totalVolunteers, assignedVolunteers, totalShifts: schedReq.shifts.length, fullyStaffed: fullyStaffedCount },\n  volunteerList: parsed\n} }];"
+      },
+      "id": "s7v1y4b6-0013",
+      "name": "Match Volunteers to Shifts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.4,
+          "maxTokens": 700
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You write short, clear volunteer schedule summaries for event coordinators. You highlight staffing gaps that need attention, note if any shifts are over-reliant on a single volunteer, and suggest practical next steps. Under 180 words.",
+              "role": "system"
+            },
+            {
+              "content": "Summarize this volunteer schedule.\n\nEvent: {{ $json.schedReq.eventName }}\nTotal volunteers in pool: {{ $json.stats.totalVolunteers }}\nVolunteers assigned: {{ $json.stats.assignedVolunteers }}\nTotal shifts: {{ $json.stats.totalShifts }}\nFully staffed shifts: {{ $json.stats.fullyStaffed }}\n\nUnfilled shifts:\n{{ $json.unfilledShifts.map(s => `- ${s.date} ${s.startTime}-${s.endTime} (${s.role}): ${s.filled}/${s.needed} filled`).join('\\n') || 'none \u2014 all shifts fully staffed' }}\n\nShift breakdown:\n{{ $json.assignments.map(a => `${a.shift.date} ${a.shift.startTime} (${a.shift.role}): ${a.assigned.map(v=>v.name).join(', ')||'UNFILLED'} [${a.filled}/${a.needed}]`).join('\\n') }}\n\nWhat the coordinator needs to know and what action to take.",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "s7v1y4b6-0014",
+      "name": "Claude Schedule Analyst",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        1300,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.VOLUNTEER_SHEET_ID}}",
+        "sheetName": "Schedule",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "event_name": "={{ $('Match Volunteers to Shifts').first().json.schedReq.eventName }}",
+            "generated_at": "={{ $now.toISO() }}",
+            "total_shifts": "={{ $('Match Volunteers to Shifts').first().json.stats.totalShifts }}",
+            "fully_staffed": "={{ $('Match Volunteers to Shifts').first().json.stats.fullyStaffed }}",
+            "unfilled": "={{ $('Match Volunteers to Shifts').first().json.unfilledShifts.length }}",
+            "schedule_json": "={{ JSON.stringify($('Match Volunteers to Shifts').first().json.assignments) }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "s7v1y4b6-0015",
+      "name": "Save Schedule",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        1520,
+        420
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const note = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nconst d = $('Match Volunteers to Shifts').first().json;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst shiftRows = d.assignments.map(a => {\n  const names = a.assigned.map(v => esc(v.name)).join(', ') || '<span style=\"color:#dc2626;font-weight:700\">UNFILLED</span>';\n  const statusColor = a.fullyStaffed ? '#16a34a' : a.filled > 0 ? '#d97706' : '#dc2626';\n  const statusLabel = a.fullyStaffed ? 'Full' : a.filled > 0 ? `${a.filled}/${a.needed}` : 'Empty';\n  return `<tr style=\"border-bottom:1px solid #f3f4f6\">\n    <td style=\"padding:9px 12px;font-size:13px;font-weight:600\">${esc(a.shift.date)}</td>\n    <td style=\"padding:9px 12px;font-size:13px\">${esc(a.shift.startTime)}\u2013${esc(a.shift.endTime)}</td>\n    <td style=\"padding:9px 12px;font-size:13px\">${esc(a.shift.role)}</td>\n    <td style=\"padding:9px 12px;font-size:13px\">${names}</td>\n    <td style=\"padding:9px 12px;text-align:center\"><span style=\"background:${statusColor}22;color:${statusColor};font-size:11px;font-weight:700;padding:2px 8px;border-radius:8px\">${statusLabel}</span></td>\n  </tr>`;\n}).join('');\n\nconst noteHtml = note.replace(/\\n/g,'<br>');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head>\n<body style=\"margin:0;padding:16px;background:#f9fafb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111\">\n<div style=\"max-width:720px;margin:0 auto\">\n  <div style=\"background:#1e3a5f;color:#fff;padding:18px 28px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#7b9ec9;margin-bottom:5px\">Volunteer Schedule</div>\n    <div style=\"font-size:19px;font-weight:700\">${esc(d.schedReq.eventName)}</div>\n    <div style=\"font-size:13px;color:#7b9ec9;margin-top:3px\">${d.stats.totalShifts} shifts \u00b7 ${d.stats.fullyStaffed} fully staffed \u00b7 ${d.unfilledShifts.length} unfilled \u00b7 ${d.stats.assignedVolunteers}/${d.stats.totalVolunteers} volunteers assigned</div>\n  </div>\n  <div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:none\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:7px\">Coordinator summary</div>\n    <p style=\"font-size:14px;line-height:1.75;color:#374151;margin:0\">${noteHtml}</p>\n  </div>\n  <div style=\"background:#fff;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <table style=\"width:100%;border-collapse:collapse\">\n      <thead><tr style=\"background:#f9fafb;font-size:11px;text-transform:uppercase;color:#9ca3af\">\n        <th style=\"padding:8px 12px;text-align:left\">Date</th>\n        <th style=\"padding:8px 12px;text-align:left\">Time</th>\n        <th style=\"padding:8px 12px;text-align:left\">Role</th>\n        <th style=\"padding:8px 12px;text-align:left\">Volunteers</th>\n        <th style=\"padding:8px 12px;text-align:center\">Status</th>\n      </tr></thead>\n      <tbody>${shiftRows}</tbody>\n    </table>\n  </div>\n  <div style=\"background:#1e3a5f;color:#475569;font-size:11px;padding:10px 28px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Volunteer Scheduler \u00b7 ${esc(d.schedReq.eventName)} \u00b7 ${new Date().toLocaleDateString()}\n  </div>\n</div></body></html>`;\n\nreturn [{ json: { html, replyEmail: d.schedReq.replyEmail, coordinatorEmail: d.schedReq.coordinatorEmail, eventName: d.schedReq.eventName, unfilledCount: d.unfilledShifts.length, stats: d.stats, assignments: d.assignments, volunteerList: d.volunteerList, notifyVolunteers: d.schedReq.notifyVolunteers } }];"
+      },
+      "id": "s7v1y4b6-0016",
+      "name": "Build Schedule Doc",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cre",
+              "leftValue": "={{ $json.replyEmail || $json.coordinatorEmail || '' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "s7v1y4b6-0017",
+      "name": "Email Coordinator?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1740,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{ $json.replyEmail || $json.coordinatorEmail }}",
+        "subject": "Volunteer schedule ready: {{ $json.eventName }} \u2014 {{ $json.unfilledCount }} unfilled shift{{ $json.unfilledCount !== 1 ? 's' : '' }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "s7v1y4b6-0018",
+      "name": "Email Schedule",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1960,
+        500
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'scheduled', event: $json.eventName, total_shifts: $json.stats.totalShifts, fully_staffed: $json.stats.fullyStaffed, unfilled: $json.unfilledCount, assignments: $json.assignments } }}"
+      },
+      "id": "s7v1y4b6-0019",
+      "name": "Return Schedule",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2180,
+        560
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook \u2013 Submit Availability": {
+      "main": [
+        [
+          {
+            "node": "Validate Availability",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Availability": {
+      "main": [
+        [
+          {
+            "node": "Avail Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Avail Valid?": {
+      "main": [
+        [
+          {
+            "node": "Save Availability",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Avail Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Availability": {
+      "main": [
+        [
+          {
+            "node": "Confirm to Volunteer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirm to Volunteer": {
+      "main": [
+        [
+          {
+            "node": "Return Avail Confirmation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook \u2013 Generate Schedule": {
+      "main": [
+        [
+          {
+            "node": "Validate Schedule Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Schedule Request": {
+      "main": [
+        [
+          {
+            "node": "Sched Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sched Valid?": {
+      "main": [
+        [
+          {
+            "node": "Load All Availability",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Sched Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load All Availability": {
+      "main": [
+        [
+          {
+            "node": "Match Volunteers to Shifts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Match Volunteers to Shifts": {
+      "main": [
+        [
+          {
+            "node": "Claude Schedule Analyst",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Save Schedule",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Schedule Analyst": {
+      "main": [
+        [
+          {
+            "node": "Build Schedule Doc",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Schedule Doc": {
+      "main": [
+        [
+          {
+            "node": "Email Coordinator?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Coordinator?": {
+      "main": [
+        [
+          {
+            "node": "Email Schedule",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Schedule",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Schedule": {
+      "main": [
+        [
+          {
+            "node": "Return Schedule",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    "nonprofit",
+    "volunteers",
+    "scheduling",
+    "events"
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-12T10:00:00.000Z",
+  "versionId": "v1.0.0"
+}
