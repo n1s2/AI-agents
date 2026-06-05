@@ -1,0 +1,358 @@
+{
+  "name": "Customer Support Triage Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "support-ticket",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "v1y4b7e9-0001",
+      "name": "Webhook \u2013 Submit Ticket",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['customer_message', 'customer_email'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nif (body.customer_message.trim().length < 10) return [{ json: { valid: false, error: 'customer_message too short' } }];\nconst ticketId = body.ticket_id || `TKT-${Date.now()}`;\nreturn [{ json: {\n  valid: true,\n  ticketId,\n  customerEmail: body.customer_email.trim(),\n  customerName: body.customer_name || '',\n  customerId: body.customer_id || '',\n  customerPlan: body.customer_plan || '',\n  customerMessage: body.customer_message.trim().slice(0, 3000),\n  channel: body.channel || 'email',\n  product: body.product || '',\n  previousTicketCount: parseInt(body.previous_ticket_count) || 0,\n  accountValue: parseFloat(body.account_value) || null,\n  currency: body.currency || 'USD',\n  knowledgeBase: (body.knowledge_base_snippets || []).slice(0, 5),\n  teamSlackChannel: body.team_slack_channel || null,\n  submittedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "v1y4b7e9-0002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cv",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "v1y4b7e9-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "v1y4b7e9-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.3,
+          "maxTokens": 1800
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are a senior customer support specialist who triages incoming tickets. You assess urgency, identify the root issue, draft a response the support agent can send with minimal editing, and route to the right team.\n\nYou understand that:\n- Enterprise/high-value customers need faster, more formal responses\n- Repeated contacts on the same issue signal a process failure, not just a customer problem\n- Angry tone often means the customer is a good fit for a direct acknowledgment, not a template\n- Some messages need escalation; most don't\n- The best first response solves the problem or sets clear expectations \u2014 it doesn't ask the customer to fill out another form\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Triage this support ticket.\n\nTicket ID: {{ $json.ticketId }}\nCustomer: {{ $json.customerName || 'unknown' }} ({{ $json.customerEmail }})\nCustomer ID: {{ $json.customerId || 'unknown' }}\nPlan/tier: {{ $json.customerPlan || 'unknown' }}\nAccount value: {{ $json.accountValue ? $json.currency + $json.accountValue : 'unknown' }}\nChannel: {{ $json.channel }}\nProduct: {{ $json.product || 'not specified' }}\nPrevious tickets this account: {{ $json.previousTicketCount }}\n\nCustomer message:\n{{ $json.customerMessage }}\n\nKnowledge base snippets available:\n{{ $json.knowledgeBase.map((kb, i) => `${i+1}. ${kb}`).join('\\n') || 'none provided' }}\n\nReturn this JSON:\n{\n  \"issue_category\": \"one of: billing | technical_bug | feature_request | how_to | account_access | complaint | cancellation | data_question | integration | other\",\n  \"issue_summary\": \"1-2 sentence plain-language summary of what the customer actually needs\",\n  \"urgency\": \"one of: critical | high | medium | low\",\n  \"urgency_rationale\": \"one sentence \u2014 why this urgency level\",\n  \"sentiment\": \"one of: very_negative | negative | neutral | positive\",\n  \"escalation_needed\": true or false,\n  \"escalation_reason\": \"why escalation is needed \u2014 null if not needed\",\n  \"routing\": \"one of: tier1_support | tier2_technical | billing_team | account_management | engineering | product_team | legal\",\n  \"routing_rationale\": \"why this team\",\n  \"sla_recommendation\": \"specific time window e.g. respond within 2 hours\",\n  \"draft_response\": \"complete first response to send to the customer \u2014 professional, specific to their issue, directly helpful. References the knowledge base if relevant. Addresses any emotional tone. Ends with a clear next step or resolution. Signed off professionally.\",\n  \"internal_note\": \"2-3 sentences for the support agent \u2014 what to watch for, context about the account, any flags\",\n  \"churn_risk\": \"one of: high | medium | low | none\",\n  \"churn_risk_rationale\": \"why this churn risk level \u2014 null if none\"\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "v1y4b7e9-0005",
+      "name": "Claude Triage Engine",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        860,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet triage;\ntry { triage = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst input = $('Validate Input').first().json;\ntriage._ticket = {\n  ticketId: input.ticketId,\n  customerEmail: input.customerEmail,\n  customerName: input.customerName,\n  customerId: input.customerId,\n  customerPlan: input.customerPlan,\n  accountValue: input.accountValue,\n  currency: input.currency,\n  channel: input.channel,\n  product: input.product,\n  previousTicketCount: input.previousTicketCount,\n  customerMessage: input.customerMessage,\n  teamSlackChannel: input.teamSlackChannel,\n  submittedAt: input.submittedAt\n};\nreturn [{ json: triage }];"
+      },
+      "id": "v1y4b7e9-0006",
+      "name": "Parse Triage",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.SUPPORT_SHEET_ID}}",
+        "sheetName": "Tickets",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "ticket_id": "={{ $json._ticket.ticketId }}",
+            "submitted_at": "={{ $json._ticket.submittedAt }}",
+            "customer_email": "={{ $json._ticket.customerEmail }}",
+            "customer_name": "={{ $json._ticket.customerName }}",
+            "customer_plan": "={{ $json._ticket.customerPlan }}",
+            "issue_category": "={{ $json.issue_category }}",
+            "urgency": "={{ $json.urgency }}",
+            "sentiment": "={{ $json.sentiment }}",
+            "routing": "={{ $json.routing }}",
+            "escalation_needed": "={{ $json.escalation_needed }}",
+            "churn_risk": "={{ $json.churn_risk }}",
+            "status": "triaged"
+          }
+        },
+        "options": {}
+      },
+      "id": "v1y4b7e9-0007",
+      "name": "Log Ticket",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        1300,
+        160
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.SUPPORT_EMAIL}}",
+        "toEmail": "={{ $json._ticket.customerEmail }}",
+        "subject": "Re: Your support request [{{ $json._ticket.ticketId }}]",
+        "emailType": "text",
+        "message": "={{ $json.draft_response }}"
+      },
+      "id": "v1y4b7e9-0008",
+      "name": "Send Auto-Response",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1300,
+        280
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "ces",
+              "leftValue": "={{ $json._ticket.teamSlackChannel || '' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "v1y4b7e9-0009",
+      "name": "Slack?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "channel": "={{ $json._ticket.teamSlackChannel }}",
+        "text": "={{ ($json.urgency === 'critical' ? '\ud83d\udea8' : $json.urgency === 'high' ? '\u26a0\ufe0f' : '\ud83c\udfab') + ' *[' + $json._ticket.ticketId + ']* ' + $json.issue_category.replace(/_/g,' ').toUpperCase() + ' \u00b7 ' + $json.urgency.toUpperCase() + ' \u00b7 ' + $json.routing.replace(/_/g,' ') + '\\n*' + ($json._ticket.customerName || $json._ticket.customerEmail) + '*' + ($json._ticket.customerPlan ? ' (' + $json._ticket.customerPlan + ')' : '') + ($json.churn_risk !== 'none' && $json.churn_risk !== 'low' ? ' \ud83d\udd34 ' + $json.churn_risk.toUpperCase() + ' CHURN RISK' : '') + '\\n' + $json.issue_summary + '\\n_' + $json.internal_note + '_' }}",
+        "otherOptions": {}
+      },
+      "id": "v1y4b7e9-0010",
+      "name": "Slack Team Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [
+        1740,
+        220
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-creds-01",
+          "name": "Slack Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'triaged', ticket_id: $json._ticket.ticketId, issue_category: $json.issue_category, urgency: $json.urgency, routing: $json.routing, escalation_needed: $json.escalation_needed, churn_risk: $json.churn_risk, draft_response_sent: true, triage: $json } }}"
+      },
+      "id": "v1y4b7e9-0011",
+      "name": "Return Triage",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1960,
+        280
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook \u2013 Submit Ticket": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Claude Triage Engine",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Triage Engine": {
+      "main": [
+        [
+          {
+            "node": "Parse Triage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Triage": {
+      "main": [
+        [
+          {
+            "node": "Log Ticket",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Auto-Response",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Slack?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack?": {
+      "main": [
+        [
+          {
+            "node": "Slack Team Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Triage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack Team Alert": {
+      "main": [
+        [
+          {
+            "node": "Return Triage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    "support",
+    "customer-service",
+    "triage",
+    "helpdesk"
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-13T11:00:00.000Z",
+  "versionId": "v1.0.0"
+}

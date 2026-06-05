@@ -1,0 +1,384 @@
+{
+  "name": "Expense Report Processor Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "submit-expense",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "t8w2z5c7-0001",
+      "name": "Webhook \u2013 Submit Expenses",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['submitter_name', 'submitter_email', 'expense_items', 'period'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nif (!Array.isArray(body.expense_items) || body.expense_items.length === 0) {\n  return [{ json: { valid: false, error: 'expense_items must be a non-empty array' } }];\n}\nconst items = body.expense_items.map((item, i) => {\n  const amount = parseFloat(item.amount);\n  if (isNaN(amount) || amount <= 0) return null;\n  return {\n    lineId: `L${String(i+1).padStart(3,'0')}`,\n    date: item.date || '',\n    description: (item.description || '').trim().slice(0, 200),\n    category: item.category || 'uncategorized',\n    amount: parseFloat(amount.toFixed(2)),\n    currency: item.currency || body.currency || 'USD',\n    merchant: item.merchant || '',\n    receiptProvided: item.receipt_provided === true || item.receipt_provided === 'true',\n    projectCode: item.project_code || body.default_project_code || '',\n    notes: (item.notes || '').slice(0, 200)\n  };\n}).filter(Boolean);\nif (items.length === 0) return [{ json: { valid: false, error: 'No valid expense items found' } }];\nconst totalAmount = items.reduce((s, i) => s + i.amount, 0);\nconst reportId = `EXP-${Date.now()}`;\nreturn [{ json: {\n  valid: true,\n  reportId,\n  submitterName: body.submitter_name.trim(),\n  submitterEmail: body.submitter_email.trim(),\n  submitterDepartment: body.submitter_department || '',\n  submitterManager: body.submitter_manager || '',\n  managerEmail: body.manager_email || '',\n  period: body.period.trim(),\n  currency: body.currency || 'USD',\n  items,\n  totalAmount: parseFloat(totalAmount.toFixed(2)),\n  itemCount: items.length,\n  purpose: (body.purpose || '').slice(0, 400),\n  policyLimits: body.policy_limits || {},\n  submittedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "t8w2z5c7-0002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cv",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "t8w2z5c7-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "t8w2z5c7-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst items = input.items;\nconst policy = input.policyLimits;\n\n// Category analysis\nconst byCategory = {};\nfor (const item of items) {\n  if (!byCategory[item.category]) byCategory[item.category] = { total: 0, count: 0, items: [] };\n  byCategory[item.category].total += item.amount;\n  byCategory[item.category].count++;\n  byCategory[item.category].items.push(item);\n}\n\n// Policy checks\nconst flags = [];\nconst MEAL_LIMIT = parseFloat(policy.meal_per_diem) || 75;\nconst ENTERTAINMENT_LIMIT = parseFloat(policy.entertainment_limit) || 150;\nconst RECEIPT_REQUIRED_ABOVE = parseFloat(policy.receipt_required_above) || 25;\nconst MAX_SINGLE_ITEM = parseFloat(policy.max_single_item) || 500;\n\nfor (const item of items) {\n  if (!item.receiptProvided && item.amount > RECEIPT_REQUIRED_ABOVE) {\n    flags.push({ lineId: item.lineId, type: 'missing_receipt', severity: 'medium', message: `Receipt required for ${input.currency}${item.amount} (${item.description})` });\n  }\n  if (item.amount > MAX_SINGLE_ITEM) {\n    flags.push({ lineId: item.lineId, type: 'high_value', severity: 'high', message: `Single item exceeds ${input.currency}${MAX_SINGLE_ITEM} limit: ${input.currency}${item.amount}` });\n  }\n  if ((item.category === 'meals' || item.category === 'food') && item.amount > MEAL_LIMIT) {\n    flags.push({ lineId: item.lineId, type: 'over_per_diem', severity: 'medium', message: `Meal expense ${input.currency}${item.amount} exceeds per diem limit of ${input.currency}${MEAL_LIMIT}` });\n  }\n  if (item.category === 'entertainment' && item.amount > ENTERTAINMENT_LIMIT) {\n    flags.push({ lineId: item.lineId, type: 'over_entertainment_limit', severity: 'high', message: `Entertainment expense ${input.currency}${item.amount} exceeds limit of ${input.currency}${ENTERTAINMENT_LIMIT}` });\n  }\n  if (!item.date) {\n    flags.push({ lineId: item.lineId, type: 'missing_date', severity: 'low', message: `No date for: ${item.description}` });\n  }\n}\n\nconst missingReceipts = items.filter(i => !i.receiptProvided && i.amount > RECEIPT_REQUIRED_ABOVE);\nconst highSeverityFlags = flags.filter(f => f.severity === 'high');\nconst recommendation = highSeverityFlags.length > 0 ? 'review_required' : flags.length > 2 ? 'flagged_for_review' : missingReceipts.length > 0 ? 'pending_receipts' : 'approve';\n\nreturn [{ json: {\n  input,\n  byCategory,\n  flags,\n  missingReceipts,\n  highSeverityFlags,\n  recommendation,\n  policyUsed: { MEAL_LIMIT, ENTERTAINMENT_LIMIT, RECEIPT_REQUIRED_ABOVE, MAX_SINGLE_ITEM }\n} }];"
+      },
+      "id": "t8w2z5c7-0005",
+      "name": "Policy Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        860,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.25,
+          "maxTokens": 700
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You review expense reports for a finance team. You summarize what's in the report, explain any policy flags clearly, and give a clear approval recommendation. You're direct and specific \u2014 not vague. Under 200 words.",
+              "role": "system"
+            },
+            {
+              "content": "Review this expense report.\n\nSubmitter: {{ $json.input.submitterName }} ({{ $json.input.submitterDepartment || 'no dept' }})\nPeriod: {{ $json.input.period }}\nTotal: {{ $json.input.currency }}{{ $json.input.totalAmount }}\nItems: {{ $json.input.itemCount }}\nPurpose: {{ $json.input.purpose || 'not stated' }}\n\nCategory breakdown:\n{{ Object.entries($json.byCategory).map(([cat, d]) => `- ${cat}: ${$json.input.currency}${d.total.toFixed(2)} (${d.count} items)`).join('\\n') }}\n\nPolicy flags ({{ $json.flags.length }}):\n{{ $json.flags.map(f => `- [${f.severity.toUpperCase()}] ${f.message}`).join('\\n') || 'none' }}\n\nRecommendation: {{ $json.recommendation.replace(/_/g,' ') }}\n\nGive: brief summary of what the report covers, explanation of any flags, and your recommendation with reasoning.",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "t8w2z5c7-0006",
+      "name": "Claude Expense Reviewer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        1080,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const review = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nconst d = $('Policy Check').first().json;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nconst cur = d.input.currency;\n\nconst recConfig = {\n  approve:            {color:'#16a34a', bg:'#f0fdf4', label:'Approve', emoji:'\u2705'},\n  pending_receipts:   {color:'#d97706', bg:'#fffbeb', label:'Pending Receipts', emoji:'\ud83d\udcce'},\n  flagged_for_review: {color:'#d97706', bg:'#fffbeb', label:'Flagged for Review', emoji:'\u26a0\ufe0f'},\n  review_required:    {color:'#dc2626', bg:'#fef2f2', label:'Review Required', emoji:'\ud83d\udea8'}\n};\nconst rc = recConfig[d.recommendation] || recConfig.flagged_for_review;\n\nconst sevColor = {high:'#dc2626', medium:'#d97706', low:'#6b7280'};\nconst flagRows = d.flags.map(f => `<div style=\"font-size:13px;padding:5px 0;border-bottom:1px solid #f3f4f6;color:${sevColor[f.severity]||'#6b7280'}\"><strong>[${f.lineId}]</strong> ${esc(f.message)}</div>`).join('');\n\nconst itemRows = d.input.items.map(item => `<tr style=\"border-bottom:1px solid #f3f4f6\">\n  <td style=\"padding:8px 12px;font-size:12px;font-family:monospace;color:#9ca3af\">${esc(item.lineId)}</td>\n  <td style=\"padding:8px 12px;font-size:13px\">${esc(item.date||'')}</td>\n  <td style=\"padding:8px 12px;font-size:13px\">${esc(item.description)}</td>\n  <td style=\"padding:8px 12px;font-size:13px;color:#6b7280\">${esc(item.category)}</td>\n  <td style=\"padding:8px 12px;font-size:13px;font-weight:600;text-align:right\">${cur}${item.amount.toFixed(2)}</td>\n  <td style=\"padding:8px 12px;text-align:center\">${item.receiptProvided ? '\u2713' : '<span style=\"color:#dc2626\">\u2717</span>'}</td>\n  <td style=\"padding:8px 12px;font-size:12px;color:#9ca3af\">${esc(item.merchant||'')}</td>\n</tr>`).join('');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head>\n<body style=\"margin:0;padding:16px;background:#f9fafb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111\">\n<div style=\"max-width:720px;margin:0 auto\">\n  <div style=\"background:#1e293b;color:#fff;padding:18px 28px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#64748b;margin-bottom:4px\">Expense Report \u00b7 ${esc(d.input.reportId)}</div>\n    <div style=\"font-size:18px;font-weight:700\">${esc(d.input.submitterName)} \u2014 ${esc(d.input.period)}</div>\n    <div style=\"font-size:13px;color:#94a3b8;margin-top:3px\">${d.input.itemCount} items \u00b7 ${cur}${d.input.totalAmount.toFixed(2)} total \u00b7 ${d.flags.length} flags</div>\n  </div>\n  <div style=\"background:${rc.bg};padding:14px 28px;border:1px solid ${rc.color}44;border-top:none;display:flex;align-items:center;gap:12px\">\n    <span style=\"font-size:20px\">${rc.emoji}</span>\n    <div>\n      <span style=\"background:${rc.color};color:#fff;font-size:12px;font-weight:700;padding:3px 10px;border-radius:12px\">${rc.label}</span>\n      <div style=\"font-size:14px;color:#374151;margin-top:6px;line-height:1.65\">${esc(review).replace(/\\n/g,'<br>')}</div>\n    </div>\n  </div>\n  ${flagRows ? `<div style=\"background:#fff;padding:14px 28px;border:1px solid #e5e7eb;border-top:none\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:8px\">Policy flags</div>\n    ${flagRows}\n  </div>` : ''}\n  <div style=\"background:#fff;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <table style=\"width:100%;border-collapse:collapse\">\n      <thead><tr style=\"background:#f9fafb;font-size:11px;text-transform:uppercase;color:#9ca3af\">\n        <th style=\"padding:7px 12px;text-align:left\">ID</th>\n        <th style=\"padding:7px 12px;text-align:left\">Date</th>\n        <th style=\"padding:7px 12px;text-align:left\">Description</th>\n        <th style=\"padding:7px 12px;text-align:left\">Category</th>\n        <th style=\"padding:7px 12px;text-align:right\">Amount</th>\n        <th style=\"padding:7px 12px;text-align:center\">Receipt</th>\n        <th style=\"padding:7px 12px;text-align:left\">Merchant</th>\n      </tr></thead>\n      <tbody>${itemRows}</tbody>\n      <tfoot><tr style=\"background:#f9fafb\">\n        <td colspan=\"4\" style=\"padding:9px 12px;font-size:14px;font-weight:700;text-align:right\">Total</td>\n        <td style=\"padding:9px 12px;font-size:15px;font-weight:800;text-align:right;color:#1a1a1a\">${cur}${d.input.totalAmount.toFixed(2)}</td>\n        <td colspan=\"2\"></td>\n      </tfoot>\n    </table>\n  </div>\n  <div style=\"background:#1e293b;color:#475569;font-size:11px;padding:10px 28px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Expense Report Processor \u00b7 ${esc(d.input.reportId)} \u00b7 ${esc(d.input.submittedAt.split('T')[0])}\n  </div>\n</div></body></html>`;\n\nreturn [{ json: { html, reportId: d.input.reportId, submitterEmail: d.input.submitterEmail, managerEmail: d.input.managerEmail, recommendation: d.recommendation, totalAmount: d.input.totalAmount, currency: cur, flagCount: d.flags.length, report: d } }];"
+      },
+      "id": "t8w2z5c7-0007",
+      "name": "Build Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.EXPENSE_SHEET_ID}}",
+        "sheetName": "Reports",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "report_id": "={{ $json.reportId }}",
+            "submitted_at": "={{ $json.report.input.submittedAt }}",
+            "submitter_name": "={{ $json.report.input.submitterName }}",
+            "submitter_email": "={{ $json.submitterEmail }}",
+            "department": "={{ $json.report.input.submitterDepartment }}",
+            "period": "={{ $json.report.input.period }}",
+            "total_amount": "={{ $json.totalAmount }}",
+            "currency": "={{ $json.currency }}",
+            "item_count": "={{ $json.report.input.itemCount }}",
+            "flag_count": "={{ $json.flagCount }}",
+            "recommendation": "={{ $json.recommendation }}",
+            "status": "pending"
+          }
+        },
+        "options": {}
+      },
+      "id": "t8w2z5c7-0008",
+      "name": "Log to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        1520,
+        160
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.submitterEmail}}",
+        "subject": "Expense report received \u2014 {{ $json.reportId }} \u00b7 {{ $json.report.input.period }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "t8w2z5c7-0009",
+      "name": "Email Submitter",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1520,
+        280
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cmgr",
+              "leftValue": "={{ $json.managerEmail }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "t8w2z5c7-0010",
+      "name": "Notify Manager?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1740,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.managerEmail}}",
+        "subject": "Expense approval needed: {{ $json.report.input.submitterName }} \u2014 {{ $json.currency }}{{ $json.totalAmount }} \u00b7 {{ $json.recommendation.replace(/_/g,' ') }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "t8w2z5c7-0011",
+      "name": "Email Manager",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1960,
+        220
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'processed', report_id: $json.reportId, total_amount: $json.totalAmount, currency: $json.currency, recommendation: $json.recommendation, flag_count: $json.flagCount, flags: $json.report.flags } }}"
+      },
+      "id": "t8w2z5c7-0012",
+      "name": "Return Result",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2200,
+        280
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook \u2013 Submit Expenses": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Policy Check",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Policy Check": {
+      "main": [
+        [
+          {
+            "node": "Claude Expense Reviewer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Expense Reviewer": {
+      "main": [
+        [
+          {
+            "node": "Build Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Report": {
+      "main": [
+        [
+          {
+            "node": "Log to Sheet",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Email Submitter",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Notify Manager?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Manager?": {
+      "main": [
+        [
+          {
+            "node": "Email Manager",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Manager": {
+      "main": [
+        [
+          {
+            "node": "Return Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    "finance",
+    "expenses",
+    "approval",
+    "accounting"
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-13T09:00:00.000Z",
+  "versionId": "v1.0.0"
+}

@@ -1,0 +1,435 @@
+{
+  "name": "SEO Content Brief Generator",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "seo-brief",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "u9x3a6d8-0001",
+      "name": "Webhook \u2013 Generate Brief",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['target_keyword', 'content_type'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nconst contentTypes = ['blog_post', 'landing_page', 'product_page', 'comparison_page', 'how_to_guide', 'listicle', 'pillar_page', 'case_study', 'faq_page'];\nconst contentType = contentTypes.includes(body.content_type) ? body.content_type : 'blog_post';\nreturn [{ json: {\n  valid: true,\n  targetKeyword: body.target_keyword.trim(),\n  contentType,\n  businessDescription: (body.business_description || '').slice(0, 400),\n  targetAudience: (body.target_audience || '').slice(0, 300),\n  competitors: Array.isArray(body.competitors) ? body.competitors.slice(0, 5) : (body.competitors || '').split(',').map(c => c.trim()).filter(Boolean).slice(0, 5),\n  relatedKeywords: Array.isArray(body.related_keywords) ? body.related_keywords : (body.related_keywords || '').split(',').map(k => k.trim()).filter(Boolean),\n  contentGoal: body.content_goal || 'organic traffic',\n  wordCountTarget: parseInt(body.word_count_target) || null,\n  tone: body.tone || 'informative',\n  existingContent: (body.existing_content_url || '').trim(),\n  replyEmail: body.reply_email || null,\n  requestedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "u9x3a6d8-0002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cv",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "u9x3a6d8-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "u9x3a6d8-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.tavily.com/search",
+        "sendBody": true,
+        "specifyBody": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "api_key",
+              "value": "={{$env.TAVILY_API_KEY}}"
+            },
+            {
+              "name": "query",
+              "value": "={{ $json.targetKeyword }}"
+            },
+            {
+              "name": "search_depth",
+              "value": "basic"
+            },
+            {
+              "name": "max_results",
+              "value": 6
+            }
+          ]
+        }
+      },
+      "id": "u9x3a6d8-0005",
+      "name": "SERP Research",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        860,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.tavily.com/search",
+        "sendBody": true,
+        "specifyBody": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "api_key",
+              "value": "={{$env.TAVILY_API_KEY}}"
+            },
+            {
+              "name": "query",
+              "value": "={{ $json.targetKeyword }} questions people ask"
+            },
+            {
+              "name": "search_depth",
+              "value": "basic"
+            },
+            {
+              "name": "max_results",
+              "value": 4
+            }
+          ]
+        }
+      },
+      "id": "u9x3a6d8-0006",
+      "name": "PAA Research",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        860,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const serpData = $('SERP Research').first().json?.results || [];\nconst paaData = $('PAA Research').first().json?.results || [];\nconst input = $('Validate Input').first().json;\n\nconst serpContext = serpData.map(r => `Title: ${r.title}\\nURL: ${r.url}\\nSnippet: ${(r.content||r.snippet||'').slice(0,300)}`).join('\\n\\n');\nconst paaContext = paaData.map(r => `${r.title}: ${(r.content||r.snippet||'').slice(0,200)}`).join('\\n');\n\nconst competingTitles = serpData.map(r => r.title).filter(Boolean);\nconst domains = serpData.map(r => { try { return new URL(r.url).hostname; } catch(e) { return r.url; } });\n\nreturn [{ json: { input, serpContext, paaContext, competingTitles, topDomains: domains.slice(0,6) } }];"
+      },
+      "id": "u9x3a6d8-0007",
+      "name": "Merge SERP Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1060,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.6,
+          "maxTokens": 3000
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You create detailed SEO content briefs for writers. You analyze SERP competition to understand what Google rewards, identify content gaps, and produce a brief that gives a writer everything they need to outrank the current results.\n\nGood SEO briefs:\n- Give a clear primary keyword and meaningful secondary keywords (not keyword stuffing)\n- Define intent precisely \u2014 what is the searcher trying to accomplish?\n- Provide a suggested structure that matches search intent, not just a generic outline\n- Call out what top-ranking content does and what gaps exist to exploit\n- Give the writer a hook and angle, not just a topic\n- Are specific enough that two writers using the same brief produce similar content\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Create a detailed SEO content brief.\n\nTarget keyword: {{ $json.input.targetKeyword }}\nContent type: {{ $json.input.contentType.replace(/_/g,' ') }}\nBusiness: {{ $json.input.businessDescription || 'not specified' }}\nTarget audience: {{ $json.input.targetAudience || 'general' }}\nContent goal: {{ $json.input.contentGoal }}\nWord count target: {{ $json.input.wordCountTarget || 'not specified' }}\nTone: {{ $json.input.tone }}\nRelated keywords: {{ $json.input.relatedKeywords.join(', ') || 'none provided' }}\nCompetitors to beat: {{ $json.input.competitors.join(', ') || 'none specified' }}\n\nCurrent SERP top results:\n{{ $json.serpContext }}\n\nPeople Also Ask context:\n{{ $json.paaContext }}\n\nCompeting titles currently ranking:\n{{ $json.competingTitles.join('\\n') }}\n\nTop domains ranking:\n{{ $json.topDomains.join(', ') }}\n\nReturn this JSON:\n{\n  \"brief_title\": \"internal title for this brief\",\n  \"search_intent\": {\n    \"type\": \"one of: informational | navigational | commercial | transactional\",\n    \"description\": \"what the searcher is actually trying to accomplish \u2014 be specific\",\n    \"stage\": \"one of: awareness | consideration | decision\"\n  },\n  \"recommended_title\": \"a specific, click-worthy title that matches intent and includes the keyword naturally\",\n  \"title_alternatives\": [\"2 additional title options with different angles\"],\n  \"target_word_count\": 0,\n  \"meta_description\": \"compelling 150-160 character meta description\",\n  \"primary_keyword\": \"{{ $json.input.targetKeyword }}\",\n  \"secondary_keywords\": [\"6-10 semantically related terms to include naturally\"],\n  \"content_angle\": \"the specific angle or hook that differentiates this piece from what's already ranking \u2014 be concrete\",\n  \"content_gap\": \"what the top-ranking content is missing or doing poorly that this piece can exploit\",\n  \"suggested_structure\": [\n    {\n      \"section\": \"H1 or H2 heading text\",\n      \"type\": \"intro | h2 | h3 | faq | cta\",\n      \"purpose\": \"what this section accomplishes for the reader and for SEO\",\n      \"notes\": \"specific things to include, stats to find, or questions to answer\",\n      \"approximate_words\": 150\n    }\n  ],\n  \"must_include_topics\": [\"specific topics, statistics, or questions that must be addressed to be comprehensive\"],\n  \"faq_questions\": [\"4-6 FAQ questions that match PAA queries for this keyword\"],\n  \"internal_linking_suggestions\": [\"types of pages or content to link to from this piece\"],\n  \"competitor_analysis\": {\n    \"what_ranks\": \"what type of content is dominating the SERP and why\",\n    \"weaknesses\": \"where current top results fall short\",\n    \"differentiation_opportunity\": \"the specific opportunity for a new piece to outperform them\"\n  },\n  \"e_e_a_t_requirements\": [\"specific E-E-A-T signals this content needs: author bio, citations, case studies, etc.\"],\n  \"technical_seo_notes\": [\"canonical strategy, schema markup recommendations, featured snippet opportunity\"]\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "u9x3a6d8-0008",
+      "name": "Claude Brief Writer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        1280,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet brief;\ntry { brief = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst input = $('Validate Input').first().json;\nbrief._meta = { targetKeyword: input.targetKeyword, contentType: input.contentType, replyEmail: input.replyEmail };\nreturn [{ json: brief }];"
+      },
+      "id": "u9x3a6d8-0009",
+      "name": "Parse Brief",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $input.first().json;\nconst m = b._meta;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst intentColors = {informational:'#2563eb', navigational:'#6b7280', commercial:'#d97706', transactional:'#16a34a'};\nconst intentColor = intentColors[b.search_intent?.type] || '#6b7280';\nconst stageColors = {awareness:'#6b7280', consideration:'#d97706', decision:'#16a34a'};\nconst stageColor = stageColors[b.search_intent?.stage] || '#6b7280';\n\nconst structureRows = (b.suggested_structure||[]).map((s,i) => {\n  const typeColors = {intro:'#6b7280', h2:'#2563eb', h3:'#7c3aed', faq:'#0891b2', cta:'#16a34a'};\n  const tc = typeColors[s.type]||'#6b7280';\n  return `<div style=\"border-left:3px solid ${tc};padding:12px 16px;margin-bottom:10px;background:#fafafa;border-radius:0 6px 6px 0\">\n    <div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:4px\">\n      <span style=\"background:${tc}22;color:${tc};font-size:11px;font-weight:700;padding:2px 8px;border-radius:8px;text-transform:uppercase\">${esc(s.type)}</span>\n      <span style=\"font-size:12px;color:#9ca3af\">~${s.approximate_words||'?'} words</span>\n    </div>\n    <div style=\"font-size:15px;font-weight:600;color:#1a1a1a;margin-bottom:4px\">${esc(s.section)}</div>\n    <div style=\"font-size:13px;color:#555;margin-bottom:4px\">${esc(s.purpose)}</div>\n    ${s.notes ? `<div style=\"font-size:12px;color:#2563eb;background:#eff6ff;padding:6px 10px;border-radius:4px\">${esc(s.notes)}</div>` : ''}\n  </div>`;\n}).join('');\n\nconst kw2ary = (b.secondary_keywords||[]).map(k => `<span style=\"display:inline-block;background:#f3f4f6;color:#374151;font-size:12px;padding:3px 10px;border-radius:12px;margin:3px 3px 0 0\">${esc(k)}</span>`).join('');\nconst faqItems = (b.faq_questions||[]).map((q,i) => `<div style=\"font-size:14px;padding:7px 0;border-bottom:1px solid #f3f4f6;color:#374151\">${i+1}. ${esc(q)}</div>`).join('');\nconst mustInclude = (b.must_include_topics||[]).map(t => `<li style=\"font-size:14px;margin-bottom:6px;line-height:1.5\">${esc(t)}</li>`).join('');\nconst eeat = (b.e_e_a_t_requirements||[]).map(e => `<div style=\"font-size:13px;padding:5px 0;border-bottom:1px solid #f0f9ff;color:#1e40af\">\u2726 ${esc(e)}</div>`).join('');\nconst titleAlts = (b.title_alternatives||[]).map((t,i) => `<div style=\"font-size:14px;padding:7px 0;border-bottom:1px solid #f3f4f6;color:#374151\">${i+2}. ${esc(t)}</div>`).join('');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f5f5f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111\">\n<div style=\"max-width:720px;margin:0 auto\">\n  <div style=\"background:#111827;color:#fff;padding:20px 28px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#6b7280;margin-bottom:5px\">SEO Content Brief \u00b7 ${esc(m.contentType.replace(/_/g,' '))}</div>\n    <div style=\"font-size:19px;font-weight:700\">${esc(b.brief_title||m.targetKeyword)}</div>\n    <div style=\"font-size:14px;color:#9ca3af;margin-top:4px\">Primary keyword: <strong>${esc(m.targetKeyword)}</strong></div>\n  </div>\n  <div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:none\">\n    <div style=\"display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px\">\n      <span style=\"background:${intentColor}22;color:${intentColor};font-size:12px;font-weight:700;padding:4px 12px;border-radius:12px\">${esc(b.search_intent?.type||'?')} intent</span>\n      <span style=\"background:${stageColor}22;color:${stageColor};font-size:12px;font-weight:700;padding:4px 12px;border-radius:12px\">${esc(b.search_intent?.stage||'?')} stage</span>\n      ${b.target_word_count ? `<span style=\"background:#f3f4f6;color:#374151;font-size:12px;padding:4px 12px;border-radius:12px\">${b.target_word_count} words</span>` : ''}\n    </div>\n    <p style=\"font-size:14px;color:#374151;line-height:1.65;margin:0\">${esc(b.search_intent?.description)}</p>\n  </div>\n  <div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:8px\">Recommended title</div>\n    <div style=\"font-size:17px;font-weight:700;color:#1a1a1a;margin-bottom:8px\">${esc(b.recommended_title)}</div>\n    ${titleAlts}\n    <div style=\"margin-top:10px;font-size:13px;color:#6b7280;background:#f9fafb;padding:8px 12px;border-radius:4px\"><strong>Meta:</strong> ${esc(b.meta_description)}</div>\n  </div>\n  <div style=\"background:#eff6ff;padding:14px 28px;border:1px solid #bfdbfe\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#1d4ed8;margin-bottom:6px\">Content angle & gap</div>\n    <p style=\"font-size:14px;color:#1e40af;line-height:1.65;margin:0 0 8px\"><strong>Angle:</strong> ${esc(b.content_angle)}</p>\n    <p style=\"font-size:14px;color:#1e40af;line-height:1.65;margin:0\"><strong>Gap:</strong> ${esc(b.content_gap)}</p>\n  </div>\n  <div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:8px\">Secondary keywords</div>\n    ${kw2ary}\n  </div>\n  <div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:10px\">Content structure</div>\n    ${structureRows}\n  </div>\n  ${mustInclude ? `<div style=\"background:#fff;padding:14px 28px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:8px\">Must include</div>\n    <ul style=\"padding-left:18px;margin:0\">${mustInclude}</ul>\n  </div>` : ''}\n  ${faqItems ? `<div style=\"background:#fff;padding:14px 28px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:8px\">FAQ questions to answer</div>\n    ${faqItems}\n  </div>` : ''}\n  <div style=\"background:#fff;padding:14px 28px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:8px\">Competitor analysis</div>\n    <div style=\"font-size:14px;color:#374151;margin-bottom:6px\"><strong>What ranks:</strong> ${esc(b.competitor_analysis?.what_ranks)}</div>\n    <div style=\"font-size:14px;color:#374151;margin-bottom:6px\"><strong>Weaknesses:</strong> ${esc(b.competitor_analysis?.weaknesses)}</div>\n    <div style=\"font-size:14px;color:#16a34a\"><strong>Opportunity:</strong> ${esc(b.competitor_analysis?.differentiation_opportunity)}</div>\n  </div>\n  ${eeat ? `<div style=\"background:#f0f9ff;padding:14px 28px;border:1px solid #bae6fd\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#0369a1;margin-bottom:7px\">E-E-A-T requirements</div>\n    ${eeat}\n  </div>` : ''}\n  <div style=\"background:#111827;color:#4b5563;font-size:11px;padding:12px 28px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    SEO Brief Generator \u00b7 ${esc(m.targetKeyword)} \u00b7 ${new Date().toLocaleDateString()}\n  </div>\n</div></body></html>`;\n\nreturn [{ json: { html, replyEmail: m.replyEmail, targetKeyword: m.targetKeyword, recommendedTitle: b.recommended_title, brief: b } }];"
+      },
+      "id": "u9x3a6d8-0010",
+      "name": "Build Brief Doc",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1720,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "ce",
+              "leftValue": "={{ $json.replyEmail }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "u9x3a6d8-0011",
+      "name": "Has Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1940,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.replyEmail}}",
+        "subject": "SEO brief: {{ $json.targetKeyword }} \u2014 {{ $json.recommendedTitle }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "u9x3a6d8-0012",
+      "name": "Email Brief",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2160,
+        220
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'generated', keyword: $json.targetKeyword, recommended_title: $json.recommendedTitle, emailed: $json.replyEmail ? true : false, brief: $json.brief } }}"
+      },
+      "id": "u9x3a6d8-0013",
+      "name": "Return Brief",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2380,
+        280
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook \u2013 Generate Brief": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "SERP Research",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "PAA Research",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SERP Research": {
+      "main": [
+        [
+          {
+            "node": "Merge SERP Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PAA Research": {
+      "main": [
+        [
+          {
+            "node": "Merge SERP Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge SERP Data": {
+      "main": [
+        [
+          {
+            "node": "Claude Brief Writer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Brief Writer": {
+      "main": [
+        [
+          {
+            "node": "Parse Brief",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Brief": {
+      "main": [
+        [
+          {
+            "node": "Build Brief Doc",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Brief Doc": {
+      "main": [
+        [
+          {
+            "node": "Has Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Email?": {
+      "main": [
+        [
+          {
+            "node": "Email Brief",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Brief",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Brief": {
+      "main": [
+        [
+          {
+            "node": "Return Brief",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    "seo",
+    "content",
+    "marketing",
+    "writing"
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-13T10:00:00.000Z",
+  "versionId": "v1.0.0"
+}
