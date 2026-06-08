@@ -1,0 +1,312 @@
+{
+  "name": "Freelance Contract Generator",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "generate-contract",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "x3a6d9g2-0001",
+      "name": "Webhook \u2013 Generate Contract",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['freelancer_name', 'client_name', 'project_description', 'payment_amount', 'currency'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nconst amount = parseFloat(body.payment_amount);\nif (isNaN(amount) || amount <= 0) return [{ json: { valid: false, error: 'payment_amount must be positive' } }];\nconst contractTypes = ['fixed_price', 'hourly', 'retainer', 'milestone_based', 'revenue_share'];\nconst contractType = contractTypes.includes(body.contract_type) ? body.contract_type : 'fixed_price';\nconst jurisdictions = ['us_general', 'uk', 'eu', 'canada', 'australia', 'us_california', 'international'];\nconst jurisdiction = jurisdictions.includes(body.jurisdiction) ? body.jurisdiction : 'us_general';\nreturn [{ json: {\n  valid: true,\n  freelancerName: body.freelancer_name.trim(),\n  freelancerEmail: body.freelancer_email || '',\n  freelancerAddress: body.freelancer_address || '',\n  freelancerBusinessName: body.freelancer_business_name || '',\n  clientName: body.client_name.trim(),\n  clientEmail: body.client_email || '',\n  clientAddress: body.client_address || '',\n  clientContactName: body.client_contact_name || '',\n  projectDescription: body.project_description.trim().slice(0, 1500),\n  deliverables: Array.isArray(body.deliverables) ? body.deliverables : (body.deliverables || '').split('\\n').map(d=>d.trim()).filter(Boolean),\n  contractType,\n  paymentAmount: amount,\n  currency: body.currency,\n  paymentSchedule: body.payment_schedule || '',\n  paymentTermsDays: parseInt(body.payment_terms_days) || 14,\n  startDate: body.start_date || '',\n  endDate: body.end_date || '',\n  jurisdiction,\n  includeIPClause: body.include_ip_clause !== false,\n  includeNDA: body.include_nda === true || body.include_nda === 'true',\n  includeNonCompete: body.include_non_compete === true || body.include_non_compete === 'true',\n  revisionRounds: parseInt(body.revision_rounds) || 2,\n  lateFeePercent: parseFloat(body.late_fee_percent) || 1.5,\n  specialTerms: (body.special_terms || '').slice(0, 600),\n  replyEmail: body.reply_email || null,\n  requestedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "x3a6d9g2-0002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cv",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "x3a6d9g2-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "x3a6d9g2-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.3,
+          "maxTokens": 3500
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You draft professional freelance service contracts. You write in plain, clear language \u2014 not legalese \u2014 while including all the clauses that protect both parties.\n\nGood freelance contracts:\n- Define scope precisely so disputes about \"out of scope\" are easy to resolve\n- Make payment terms explicit with specific dates, amounts, and late fee mechanics\n- Assign IP clearly \u2014 in most cases the client gets it on final payment, not before\n- Include a kill fee if the client cancels mid-project\n- Define revision rounds explicitly to prevent scope creep\n- Avoid ambiguity: \"reasonable time\" is not a delivery term; \"10 business days\" is\n\nYou calibrate clauses to the jurisdiction specified. US contracts differ from UK ones on IP, employment classification, and dispute resolution.\n\nThis is a starting point for review, not a substitute for legal counsel.\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Draft a freelance service contract.\n\nFreelancer: {{ $json.freelancerName }}{{ $json.freelancerBusinessName ? ' (' + $json.freelancerBusinessName + ')' : '' }}\nFreelancer email: {{ $json.freelancerEmail || 'not provided' }}\nFreelancer address: {{ $json.freelancerAddress || 'not provided' }}\n\nClient: {{ $json.clientName }}{{ $json.clientContactName ? ' (Contact: ' + $json.clientContactName + ')' : '' }}\nClient email: {{ $json.clientEmail || 'not provided' }}\nClient address: {{ $json.clientAddress || 'not provided' }}\n\nContract type: {{ $json.contractType.replace(/_/g,' ') }}\nJurisdiction: {{ $json.jurisdiction.replace(/_/g,' ') }}\nPayment: {{ $json.currency }}{{ $json.paymentAmount }} {{ $json.paymentSchedule ? '\u2014 ' + $json.paymentSchedule : '' }}\nPayment terms: Net {{ $json.paymentTermsDays }} days\nLate fee: {{ $json.lateFeePercent }}% per month\nStart date: {{ $json.startDate || 'to be agreed' }}\nEnd date: {{ $json.endDate || 'on project completion' }}\nRevision rounds: {{ $json.revisionRounds }}\n\nProject description:\n{{ $json.projectDescription }}\n\nDeliverables:\n{{ $json.deliverables.map((d,i) => `${i+1}. ${d}`).join('\\n') || 'as described in project description' }}\n\nInclude IP assignment clause: {{ $json.includeIPClause }}\nInclude NDA: {{ $json.includeNDA }}\nInclude non-compete: {{ $json.includeNonCompete }}\nSpecial terms: {{ $json.specialTerms || 'none' }}\n\nReturn this JSON:\n{\n  \"contract_title\": \"FREELANCE SERVICES AGREEMENT\",\n  \"effective_date_placeholder\": \"[ DATE ]\",\n  \"sections\": [\n    {\n      \"section_number\": \"1\",\n      \"title\": \"PARTIES\",\n      \"content\": \"full section text\"\n    }\n  ],\n  \"signature_block\": \"formatted signature block for both parties\",\n  \"key_terms_summary\": {\n    \"payment\": \"plain English summary of payment terms\",\n    \"ip_ownership\": \"plain English summary of who owns what and when\",\n    \"revisions\": \"plain English summary of revision policy\",\n    \"termination\": \"plain English summary of termination and kill fee terms\"\n  },\n  \"red_flags_for_review\": [\"things the freelancer should have a lawyer review before signing \u2014 specific to this contract\"],\n  \"client_obligations\": [\"key obligations placed on the client in this contract\"],\n  \"freelancer_protections\": [\"key protections included for the freelancer\"]\n}\n\nRequired sections to include:\n1. Parties\n2. Services & Deliverables (specific scope)\n3. Timeline & Milestones\n4. Payment Terms (including late fees, kill fee if applicable)\n5. Revisions & Change Orders\n6. Intellectual Property{{ ' (include IP assignment clause)' if True else '' }}\n7. Independent Contractor Status\n8. Confidentiality{{ ' + NDA clause' if True else '' }}\n9. Limitation of Liability\n10. Termination\n11. Dispute Resolution ({{ $json.jurisdiction.replace(/_/g,' ') }})\n12. General Provisions",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "x3a6d9g2-0005",
+      "name": "Claude Contract Drafter",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        860,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet contract;\ntry { contract = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst input = $('Validate Input').first().json;\ncontract._meta = { freelancerName: input.freelancerName, clientName: input.clientName, projectDescription: input.projectDescription.slice(0,100), paymentAmount: input.paymentAmount, currency: input.currency, jurisdiction: input.jurisdiction, replyEmail: input.replyEmail };\nreturn [{ json: contract }];"
+      },
+      "id": "x3a6d9g2-0006",
+      "name": "Parse Contract",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const c = $input.first().json;\nconst m = c._meta;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst sectionBlocks = (c.sections||[]).map(s => `\n  <div style=\"margin-bottom:24px\">\n    <div style=\"font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#1a1a1a;border-bottom:1px solid #e5e7eb;padding-bottom:6px;margin-bottom:10px\">${esc(s.section_number)}. ${esc(s.title)}</div>\n    <div style=\"font-size:14px;line-height:1.8;color:#374151;white-space:pre-wrap\">${esc(s.content)}</div>\n  </div>`).join('');\n\nconst redFlags = (c.red_flags_for_review||[]).map(f => `<li style=\"font-size:13px;margin-bottom:6px;line-height:1.5;color:#7f1d1d\">${esc(f)}</li>`).join('');\nconst protections = (c.freelancer_protections||[]).map(p => `<div style=\"font-size:13px;padding:5px 0;border-bottom:1px solid #f0fdf4;color:#166534\">\u2713 ${esc(p)}</div>`).join('');\nconst clientObligations = (c.client_obligations||[]).map(o => `<div style=\"font-size:13px;padding:5px 0;border-bottom:1px solid #f0f9ff;color:#1e40af\">\u2022 ${esc(o)}</div>`).join('');\n\nconst kt = c.key_terms_summary || {};\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f5f5f0;font-family:Georgia,'Times New Roman',serif;color:#1a1a1a\">\n<div style=\"max-width:720px;margin:0 auto\">\n  <div style=\"background:#1c1917;color:#fff;padding:22px 32px;border-radius:10px 10px 0 0;text-align:center\">\n    <div style=\"font-size:20px;font-weight:700;letter-spacing:1px\">${esc(c.contract_title||'FREELANCE SERVICES AGREEMENT')}</div>\n    <div style=\"font-size:13px;color:#78716c;margin-top:5px\">Effective Date: ${esc(c.effective_date_placeholder||'[ DATE ]')}</div>\n  </div>\n  <div style=\"background:#fff;padding:16px 32px;border:1px solid #e7e5e4;border-top:none\">\n    <div style=\"display:grid;grid-template-columns:1fr 1fr;gap:16px;font-size:13px\">\n      <div><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:6px\">Payment</div><div style=\"color:#374151;line-height:1.6\">${esc(kt.payment||'')}</div></div>\n      <div><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:6px\">IP ownership</div><div style=\"color:#374151;line-height:1.6\">${esc(kt.ip_ownership||'')}</div></div>\n      <div><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:6px\">Revisions</div><div style=\"color:#374151;line-height:1.6\">${esc(kt.revisions||'')}</div></div>\n      <div><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:6px\">Termination</div><div style=\"color:#374151;line-height:1.6\">${esc(kt.termination||'')}</div></div>\n    </div>\n  </div>\n  <div style=\"background:#fff;padding:22px 32px;border:1px solid #e7e5e4;border-top:3px solid #f5f5f0;font-family:Georgia,serif\">\n    ${sectionBlocks}\n    <div style=\"margin-top:32px;padding-top:20px;border-top:1px solid #e7e5e4\">\n      <div style=\"font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9ca3af;margin-bottom:12px\">Signatures</div>\n      <div style=\"white-space:pre-wrap;font-size:14px;line-height:2\">${esc(c.signature_block||'')}</div>\n    </div>\n  </div>\n  ${protections ? `<div style=\"background:#f0fdf4;padding:14px 32px;border:1px solid #bbf7d0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#15803d;margin-bottom:8px\">Freelancer protections in this contract</div>\n    ${protections}\n  </div>` : ''}\n  ${clientObligations ? `<div style=\"background:#eff6ff;padding:14px 32px;border:1px solid #bfdbfe\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#1d4ed8;margin-bottom:8px\">Client obligations</div>\n    ${clientObligations}\n  </div>` : ''}\n  ${redFlags ? `<div style=\"background:#fef2f2;padding:14px 32px;border:1px solid #fecaca\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#b91c1c;margin-bottom:8px\">Review with a lawyer before signing</div>\n    <ul style=\"padding-left:18px;margin:0\">${redFlags}</ul>\n    <div style=\"font-size:12px;color:#9ca3af;margin-top:10px;font-family:sans-serif\">This contract is a starting point and not legal advice. Review with a qualified attorney in your jurisdiction.</div>\n  </div>` : ''}\n  <div style=\"background:#1c1917;color:#57534e;font-size:11px;padding:12px 32px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Freelance Contract Generator \u00b7 Not legal advice \u00b7 ${new Date().toLocaleDateString()}\n  </div>\n</div></body></html>`;\n\nreturn [{ json: { html, replyEmail: m.replyEmail, freelancerName: m.freelancerName, clientName: m.clientName, paymentAmount: m.paymentAmount, currency: m.currency, contract: c } }];"
+      },
+      "id": "x3a6d9g2-0007",
+      "name": "Build Contract Doc",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "ce",
+              "leftValue": "={{ $json.replyEmail }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "x3a6d9g2-0008",
+      "name": "Has Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.replyEmail}}",
+        "subject": "Contract draft: {{ $json.freelancerName }} \u00d7 {{ $json.clientName }} \u2014 {{ $json.currency }}{{ $json.paymentAmount }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "x3a6d9g2-0009",
+      "name": "Email Contract",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1740,
+        180
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'drafted', freelancer: $json.freelancerName, client: $json.clientName, payment: $json.paymentAmount, currency: $json.currency, emailed: $json.replyEmail ? true : false, contract: $json.contract } }}"
+      },
+      "id": "x3a6d9g2-0010",
+      "name": "Return Contract",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1960,
+        240
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook \u2013 Generate Contract": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Claude Contract Drafter",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Contract Drafter": {
+      "main": [
+        [
+          {
+            "node": "Parse Contract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Contract": {
+      "main": [
+        [
+          {
+            "node": "Build Contract Doc",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Contract Doc": {
+      "main": [
+        [
+          {
+            "node": "Has Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Email?": {
+      "main": [
+        [
+          {
+            "node": "Email Contract",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Contract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Contract": {
+      "main": [
+        [
+          {
+            "node": "Return Contract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    "freelance",
+    "contracts",
+    "legal",
+    "business"
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-14T10:00:00.000Z",
+  "versionId": "v1.0.0"
+}

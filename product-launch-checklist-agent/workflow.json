@@ -1,0 +1,312 @@
+{
+  "name": "Product Launch Checklist Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "launch-checklist",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "w2z5c8f1-0001",
+      "name": "Webhook \u2013 Generate Checklist",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['product_name', 'launch_date', 'product_type'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nconst launchDate = new Date(body.launch_date);\nif (isNaN(launchDate)) return [{ json: { valid: false, error: 'launch_date must be a valid date (YYYY-MM-DD)' } }];\nconst today = new Date();\ntoday.setHours(0,0,0,0);\nconst daysUntilLaunch = Math.floor((launchDate - today) / 86400000);\nconst productTypes = ['saas', 'mobile_app', 'physical_product', 'digital_download', 'marketplace_listing', 'api_product', 'content_product', 'service_launch', 'feature_release'];\nconst productType = productTypes.includes(body.product_type) ? body.product_type : 'saas';\nconst channels = Array.isArray(body.launch_channels)\n  ? body.launch_channels\n  : (body.launch_channels || '').split(',').map(c => c.trim()).filter(Boolean);\nreturn [{ json: {\n  valid: true,\n  productName: body.product_name.trim(),\n  productType,\n  launchDate: body.launch_date,\n  daysUntilLaunch,\n  launchChannels: channels,\n  teamSize: parseInt(body.team_size) || null,\n  existingAudience: body.existing_audience === true || body.existing_audience === 'true',\n  targetMarket: (body.target_market || '').slice(0, 300),\n  keyFeatures: (body.key_features || '').slice(0, 500),\n  launchGoal: (body.launch_goal || '').slice(0, 300),\n  knownRisks: (body.known_risks || '').slice(0, 400),\n  previousLaunches: body.previous_launches || '',\n  replyEmail: body.reply_email || null,\n  requestedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "w2z5c8f1-0002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cv",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "w2z5c8f1-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "w2z5c8f1-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.55,
+          "maxTokens": 3500
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You build detailed product launch checklists for product managers and founders. You know what actually gets missed in launches \u2014 not generic advice but the specific things that bite teams depending on their product type, timeline, and channels.\n\nA good launch checklist:\n- Is organized into phases with specific time-relative milestones (T-30 days, T-7 days, launch day, T+7 days)\n- Assigns each item to a realistic owner (product, marketing, engineering, legal, support, design, exec)\n- Distinguishes between blockers (can't launch without) and important but non-blocking items\n- Is calibrated to the team's actual situation \u2014 a 2-person team launching a SaaS needs different things than a 20-person team launching a physical product\n- Calls out the commonly overlooked items for this specific product type\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Generate a product launch checklist.\n\nProduct: {{ $json.productName }}\nType: {{ $json.productType.replace(/_/g,' ') }}\nLaunch date: {{ $json.launchDate }}\nDays until launch: {{ $json.daysUntilLaunch }}\nLaunch channels: {{ $json.launchChannels.join(', ') || 'not specified' }}\nTeam size: {{ $json.teamSize || 'not specified' }}\nExisting audience: {{ $json.existingAudience }}\nTarget market: {{ $json.targetMarket || 'not specified' }}\nKey features: {{ $json.keyFeatures || 'not specified' }}\nLaunch goal: {{ $json.launchGoal || 'not specified' }}\nKnown risks: {{ $json.knownRisks || 'none specified' }}\nPrevious launches: {{ $json.previousLaunches || 'not specified' }}\n\nReturn this JSON:\n{\n  \"launch_readiness_assessment\": \"2-3 sentences on overall readiness given the timeline and product type \u2014 be honest if the timeline is tight\",\n  \"critical_path_items\": [\"the 3-5 items that are most likely to delay or derail the launch if not done \u2014 be specific to this product type\"],\n  \"phases\": [\n    {\n      \"phase\": \"T-30 to T-14 days\",\n      \"label\": \"Foundation\",\n      \"items\": [\n        {\n          \"task\": \"specific, actionable task\",\n          \"owner\": \"product | marketing | engineering | design | legal | support | exec | all\",\n          \"is_blocker\": true or false,\n          \"notes\": \"why this matters or how to do it \u2014 1-2 sentences\",\n          \"estimated_hours\": 4\n        }\n      ]\n    }\n  ],\n  \"launch_day_runbook\": [\n    {\n      \"time\": \"e.g. 6:00 AM\",\n      \"task\": \"specific launch day action\",\n      \"owner\": \"team\",\n      \"if_fails\": \"contingency if this step fails or is delayed\"\n    }\n  ],\n  \"post_launch_monitoring\": {\n    \"metrics_to_watch\": [\"specific metrics for first 48 hours\"],\n    \"alert_thresholds\": [\"specific thresholds that should trigger action\"],\n    \"day_1_tasks\": [\"actions for the first day post-launch\"],\n    \"week_1_tasks\": [\"actions for the first week post-launch\"]\n  },\n  \"commonly_overlooked\": [\"3-5 things teams forget for this specific product type and launch channel combination\"],\n  \"go_no_go_criteria\": [\"5-7 specific conditions that must be true on launch day \u2014 concrete, verifiable\"]\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "w2z5c8f1-0005",
+      "name": "Claude Checklist Generator",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        860,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet checklist;\ntry { checklist = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst input = $('Validate Input').first().json;\nchecklist._meta = { productName: input.productName, productType: input.productType, launchDate: input.launchDate, daysUntilLaunch: input.daysUntilLaunch, launchChannels: input.launchChannels, replyEmail: input.replyEmail };\nreturn [{ json: checklist }];"
+      },
+      "id": "w2z5c8f1-0006",
+      "name": "Parse Checklist",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const c = $input.first().json;\nconst m = c._meta;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst ownerColors = {product:'#7c3aed', marketing:'#2563eb', engineering:'#16a34a', design:'#d97706', legal:'#dc2626', support:'#0891b2', exec:'#374151', all:'#6b7280'};\n\nconst totalTasks = (c.phases||[]).reduce((s,p) => s + (p.items||[]).length, 0);\nconst blockerCount = (c.phases||[]).reduce((s,p) => s + (p.items||[]).filter(i=>i.is_blocker).length, 0);\n\nconst phaseBlocks = (c.phases||[]).map(phase => {\n  const items = (phase.items||[]).map(item => {\n    const oc = ownerColors[item.owner] || '#6b7280';\n    return `<div style=\"display:flex;gap:10px;padding:9px 0;border-bottom:1px solid #f3f4f6;align-items:flex-start\">\n      <input type=\"checkbox\" style=\"margin-top:3px;flex-shrink:0\">\n      <div style=\"flex:1\">\n        <div style=\"display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:3px\">\n          <span style=\"font-size:14px;font-weight:${item.is_blocker ? '700' : '500'};color:${item.is_blocker ? '#1a1a1a' : '#374151'}\">${esc(item.task)}</span>\n          ${item.is_blocker ? '<span style=\"background:#fef2f2;color:#dc2626;font-size:10px;font-weight:700;padding:1px 7px;border-radius:8px\">BLOCKER</span>' : ''}\n        </div>\n        <div style=\"display:flex;gap:8px;align-items:center\">\n          <span style=\"background:${oc}22;color:${oc};font-size:11px;padding:2px 8px;border-radius:8px;font-weight:600\">${esc(item.owner)}</span>\n          ${item.estimated_hours ? `<span style=\"font-size:11px;color:#9ca3af\">~${item.estimated_hours}h</span>` : ''}\n        </div>\n        ${item.notes ? `<div style=\"font-size:12px;color:#6b7280;margin-top:4px\">${esc(item.notes)}</div>` : ''}\n      </div>\n    </div>`;\n  }).join('');\n  return `<div style=\"margin-bottom:24px\">\n    <div style=\"background:#f8faff;border-left:4px solid #2563eb;padding:10px 16px;margin-bottom:10px;border-radius:0 6px 6px 0\">\n      <div style=\"font-size:12px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.4px\">${esc(phase.phase)}</div>\n      <div style=\"font-size:16px;font-weight:700;color:#1e3a8a\">${esc(phase.label)}</div>\n    </div>\n    ${items}\n  </div>`;\n}).join('');\n\nconst runbookRows = (c.launch_day_runbook||[]).map(r => `\n  <tr style=\"border-bottom:1px solid #f3f4f6\">\n    <td style=\"padding:8px 12px;font-size:13px;font-weight:600;color:#374151;white-space:nowrap\">${esc(r.time)}</td>\n    <td style=\"padding:8px 12px;font-size:13px\">${esc(r.task)}</td>\n    <td style=\"padding:8px 12px;font-size:12px;color:#6b7280\">${esc(r.owner)}</td>\n    <td style=\"padding:8px 12px;font-size:12px;color:#d97706\">${esc(r.if_fails||'\u2014')}</td>\n  </tr>`).join('');\n\nconst goNogo = (c.go_no_go_criteria||[]).map(g => `<div style=\"font-size:14px;padding:7px 0;border-bottom:1px solid #f0fdf4;color:#166534\">\u2610 ${esc(g)}</div>`).join('');\nconst overlooked = (c.commonly_overlooked||[]).map(o => `<li style=\"font-size:14px;margin-bottom:7px;line-height:1.5;color:#374151\">${esc(o)}</li>`).join('');\nconst critical = (c.critical_path_items||[]).map(p => `<div style=\"font-size:14px;padding:6px 0;border-bottom:1px solid #fecaca;color:#7f1d1d\">\u26a1 ${esc(p)}</div>`).join('');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f5f5f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111\">\n<div style=\"max-width:720px;margin:0 auto\">\n  <div style=\"background:#111827;color:#fff;padding:20px 28px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#6b7280;margin-bottom:5px\">Launch Checklist \u00b7 ${esc(m.productType.replace(/_/g,' '))}</div>\n    <div style=\"font-size:19px;font-weight:700\">${esc(m.productName)}</div>\n    <div style=\"font-size:13px;color:#9ca3af;margin-top:4px\">Launch: ${esc(m.launchDate)} \u00b7 ${m.daysUntilLaunch > 0 ? m.daysUntilLaunch + ' days away' : m.daysUntilLaunch === 0 ? 'TODAY' : Math.abs(m.daysUntilLaunch) + ' days ago'} \u00b7 ${totalTasks} tasks \u00b7 ${blockerCount} blockers</div>\n  </div>\n  <div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:none\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:6px\">Readiness assessment</div>\n    <p style=\"font-size:14px;line-height:1.7;color:#374151;margin:0\">${esc(c.launch_readiness_assessment)}</p>\n  </div>\n  ${critical ? `<div style=\"background:#fef2f2;padding:14px 28px;border:1px solid #fecaca\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#b91c1c;margin-bottom:8px\">Critical path \u2014 don't miss these</div>\n    ${critical}\n  </div>` : ''}\n  <div style=\"background:#fff;padding:18px 28px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:14px\">Checklist by phase</div>\n    ${phaseBlocks}\n  </div>\n  ${runbookRows ? `<div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:10px\">Launch day runbook</div>\n    <table style=\"width:100%;border-collapse:collapse\">\n      <thead><tr style=\"font-size:11px;text-transform:uppercase;color:#9ca3af\">\n        <th style=\"padding:7px 12px;text-align:left\">Time</th>\n        <th style=\"padding:7px 12px;text-align:left\">Task</th>\n        <th style=\"padding:7px 12px;text-align:left\">Owner</th>\n        <th style=\"padding:7px 12px;text-align:left\">If it fails</th>\n      </tr></thead>\n      <tbody>${runbookRows}</tbody>\n    </table>\n  </div>` : ''}\n  ${goNogo ? `<div style=\"background:#f0fdf4;padding:14px 28px;border:1px solid #bbf7d0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#15803d;margin-bottom:8px\">Go / No-go criteria</div>\n    ${goNogo}\n  </div>` : ''}\n  ${overlooked ? `<div style=\"background:#fffbeb;padding:14px 28px;border:1px solid #fde68a\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#92400e;margin-bottom:8px\">Commonly overlooked for this type</div>\n    <ul style=\"padding-left:18px;margin:0\">${overlooked}</ul>\n  </div>` : ''}\n  <div style=\"background:#111827;color:#4b5563;font-size:11px;padding:12px 28px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Launch Checklist Agent \u00b7 ${esc(m.productName)} \u00b7 ${esc(m.launchDate)}\n  </div>\n</div></body></html>`;\n\nreturn [{ json: { html, replyEmail: m.replyEmail, productName: m.productName, launchDate: m.launchDate, totalTasks, blockerCount, checklist: c } }];"
+      },
+      "id": "w2z5c8f1-0007",
+      "name": "Build Checklist Doc",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "ce",
+              "leftValue": "={{ $json.replyEmail }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "w2z5c8f1-0008",
+      "name": "Has Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.replyEmail}}",
+        "subject": "Launch checklist: {{ $json.productName }} \u00b7 {{ $json.launchDate }} \u00b7 {{ $json.totalTasks }} tasks, {{ $json.blockerCount }} blockers",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "w2z5c8f1-0009",
+      "name": "Email Checklist",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1740,
+        180
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'generated', product: $json.productName, launch_date: $json.launchDate, total_tasks: $json.totalTasks, blocker_count: $json.blockerCount, emailed: $json.replyEmail ? true : false, checklist: $json.checklist } }}"
+      },
+      "id": "w2z5c8f1-0010",
+      "name": "Return Checklist",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1960,
+        240
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook \u2013 Generate Checklist": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Claude Checklist Generator",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Checklist Generator": {
+      "main": [
+        [
+          {
+            "node": "Parse Checklist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Checklist": {
+      "main": [
+        [
+          {
+            "node": "Build Checklist Doc",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Checklist Doc": {
+      "main": [
+        [
+          {
+            "node": "Has Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Email?": {
+      "main": [
+        [
+          {
+            "node": "Email Checklist",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Checklist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Checklist": {
+      "main": [
+        [
+          {
+            "node": "Return Checklist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    "product",
+    "launch",
+    "planning",
+    "checklist"
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-14T09:00:00.000Z",
+  "versionId": "v1.0.0"
+}

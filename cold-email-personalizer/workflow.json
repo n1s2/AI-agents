@@ -1,0 +1,455 @@
+{
+  "name": "Cold Email Personalizer Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "personalize-email",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "y4b7e1h3-0001",
+      "name": "Webhook \u2013 Personalize Email",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['prospect_name', 'prospect_company', 'sender_name', 'value_proposition', 'email_goal'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nconst goalTypes = ['book_meeting', 'get_reply', 'share_resource', 'partnership', 'sales_intro', 'investor_intro', 'job_inquiry', 'other'];\nconst emailGoal = goalTypes.includes(body.email_goal) ? body.email_goal : 'get_reply';\nconst tones = ['direct', 'warm', 'formal', 'casual', 'challenger'];\nconst tone = tones.includes(body.tone) ? body.tone : 'direct';\nreturn [{ json: {\n  valid: true,\n  prospectName: body.prospect_name.trim(),\n  prospectTitle: body.prospect_title || '',\n  prospectCompany: body.prospect_company.trim(),\n  prospectLinkedIn: body.prospect_linkedin_url || '',\n  prospectContext: (body.prospect_context || '').slice(0, 600),\n  senderName: body.sender_name.trim(),\n  senderTitle: body.sender_title || '',\n  senderCompany: body.sender_company || '',\n  valueProposition: body.value_proposition.trim().slice(0, 500),\n  socialProof: (body.social_proof || '').slice(0, 300),\n  emailGoal,\n  tone,\n  cta: body.cta || '',\n  wordLimit: Math.min(200, Math.max(50, parseInt(body.word_limit) || 100)),\n  avoidPhrases: Array.isArray(body.avoid_phrases) ? body.avoid_phrases : (body.avoid_phrases || '').split(',').map(p => p.trim()).filter(Boolean),\n  replyEmail: body.reply_email || null,\n  requestedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "y4b7e1h3-0002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cv",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "y4b7e1h3-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "y4b7e1h3-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cli",
+              "leftValue": "={{ $json.prospectLinkedIn || $json.prospectContext }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "y4b7e1h3-0005",
+      "name": "Research Needed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        860,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.tavily.com/search",
+        "sendBody": true,
+        "specifyBody": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "api_key",
+              "value": "={{$env.TAVILY_API_KEY}}"
+            },
+            {
+              "name": "query",
+              "value": "={{ $json.prospectName }} {{ $json.prospectCompany }} {{ $json.prospectTitle }}"
+            },
+            {
+              "name": "search_depth",
+              "value": "basic"
+            },
+            {
+              "name": "max_results",
+              "value": 4
+            },
+            {
+              "name": "days",
+              "value": 90
+            }
+          ]
+        }
+      },
+      "id": "y4b7e1h3-0006",
+      "name": "Research Prospect",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1060,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const searchResults = $input.first().json?.results || [];\nconst input = $('Validate Input').first().json;\nconst webContext = searchResults.map(r => `${r.title}: ${(r.content||r.snippet||'').slice(0,300)}`).join('\\n');\nconst combinedContext = [input.prospectContext, webContext].filter(Boolean).join('\\n\\n');\nreturn [{ json: { input, prospectResearch: combinedContext || 'No research available.' } }];"
+      },
+      "id": "y4b7e1h3-0007",
+      "name": "Merge Research",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $('Validate Input').first().json;\nreturn [{ json: { input, prospectResearch: input.prospectContext || 'No additional context.' } }];"
+      },
+      "id": "y4b7e1h3-0008",
+      "name": "Skip Research",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1060,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.72,
+          "maxTokens": 1200
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You write cold emails that get replies. You've studied what actually works: emails that are short, specific, make the value immediately obvious, and have a low-friction CTA.\n\nWhat makes cold email fail:\n- Opening with \"I hope this finds you well\"\n- Talking about the sender's company before establishing relevance\n- Vague value props (\"we help companies grow\")\n- Long paragraphs nobody reads\n- CTAs that ask for too much (30-minute calls with strangers)\n- Obvious copy-paste with no personalization\n\nWhat works:\n- Leading with something specific to the prospect (a recent article, a company milestone, a shared challenge in their industry)\n- One sharp sentence on what you do and the outcome it creates\n- Social proof that's specific (not \"we work with enterprise companies\" but \"we helped Acme reduce X by Y\")\n- CTA that's a question or a tiny ask, not a booking link\n\nYou use the prospect research to find one genuine, specific hook. If there's nothing good in the research, you don't fake it \u2014 you lead with industry context instead.\n\nYou write in the requested tone and stay under the word limit.\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Write a personalized cold email.\n\nProspect: {{ $json.input.prospectName }}{{ $json.input.prospectTitle ? ', ' + $json.input.prospectTitle : '' }} at {{ $json.input.prospectCompany }}\nSender: {{ $json.input.senderName }}{{ $json.input.senderTitle ? ', ' + $json.input.senderTitle : '' }}{{ $json.input.senderCompany ? ' at ' + $json.input.senderCompany : '' }}\nGoal: {{ $json.input.emailGoal.replace(/_/g,' ') }}\nTone: {{ $json.input.tone }}\nWord limit: {{ $json.input.wordLimit }}\nValue prop: {{ $json.input.valueProposition }}\nSocial proof: {{ $json.input.socialProof || 'none provided' }}\nCTA preference: {{ $json.input.cta || 'suggest appropriate CTA' }}\nAvoid phrases: {{ $json.input.avoidPhrases.join(', ') || 'none specified' }}\n\nProspect research:\n{{ $json.prospectResearch }}\n\nReturn this JSON:\n{\n  \"subject_line\": \"subject line \u2014 specific, not generic, ideally under 8 words\",\n  \"subject_alternatives\": [\"2 alternative subject lines with different angles\"],\n  \"personalization_hook\": \"the specific thing from the research used to open the email \u2014 or null if no good hook found\",\n  \"email_body\": \"complete email body \u2014 under the word limit, in the requested tone. No greeting like 'Hi [name]' \u2014 start with the hook or first sentence directly. End with the CTA.\",\n  \"email_with_greeting\": \"full email including 'Hi [ProspectName],' opener and sign-off with sender name\",\n  \"cta_used\": \"the specific CTA in this email\",\n  \"word_count\": 0,\n  \"personalization_quality\": \"one of: highly_personalized | moderately_personalized | generic_industry | could_not_personalize\",\n  \"personalization_quality_note\": \"why this rating \u2014 what was or wasn't available to personalize with\",\n  \"what_to_research_before_sending\": [\"specific things to look up per prospect before hitting send \u2014 not generic but based on this particular situation\"],\n  \"follow_up_angle\": \"a different angle for the follow-up email if this one doesn't get a reply\"\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "y4b7e1h3-0009",
+      "name": "Claude Email Writer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        1500,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet email;\ntry { email = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst input = $('Validate Input').first().json;\nemail._meta = { prospectName: input.prospectName, prospectCompany: input.prospectCompany, senderName: input.senderName, emailGoal: input.emailGoal, tone: input.tone, replyEmail: input.replyEmail };\nreturn [{ json: email }];"
+      },
+      "id": "y4b7e1h3-0010",
+      "name": "Parse Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1720,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const e = $input.first().json;\nconst m = e._meta;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst pqColors = { highly_personalized:'#16a34a', moderately_personalized:'#2563eb', generic_industry:'#d97706', could_not_personalize:'#dc2626' };\nconst pqColor = pqColors[e.personalization_quality] || '#6b7280';\n\nconst altSubjects = (e.subject_alternatives||[]).map((s,i) => `<div style=\"font-size:13px;padding:6px 0;border-bottom:1px solid #f3f4f6;color:#6b7280\">${i+2}. ${esc(s)}</div>`).join('');\nconst researchItems = (e.what_to_research_before_sending||[]).map(r => `<li style=\"font-size:13px;margin-bottom:6px;line-height:1.5;color:#374151\">${esc(r)}</li>`).join('');\n\nconst emailBodyHtml = esc(e.email_with_greeting || e.email_body || '').replace(/\\n/g,'<br>');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f9fafb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111\">\n<div style=\"max-width:680px;margin:0 auto\">\n  <div style=\"background:#111827;color:#fff;padding:18px 26px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#6b7280;margin-bottom:4px\">Cold Email \u00b7 ${esc(m.emailGoal.replace(/_/g,' '))} \u00b7 ${esc(m.tone)}</div>\n    <div style=\"font-size:18px;font-weight:700\">To: ${esc(m.prospectName)} at ${esc(m.prospectCompany)}</div>\n    <div style=\"font-size:13px;color:#9ca3af;margin-top:3px\">From: ${esc(m.senderName)} \u00b7 ${e.word_count||'?'} words \u00b7 <span style=\"color:${pqColor}\">${esc((e.personalization_quality||'').replace(/_/g,' '))}</span></div>\n  </div>\n\n  <div style=\"background:#fff;padding:16px 26px;border:1px solid #e5e7eb;border-top:none\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:4px\">Subject line</div>\n    <div style=\"font-size:17px;font-weight:700;color:#1a1a1a;margin-bottom:8px\">${esc(e.subject_line)}</div>\n    ${altSubjects}\n  </div>\n\n  ${e.personalization_hook ? `<div style=\"background:#eff6ff;padding:12px 26px;border:1px solid #bfdbfe\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#1d4ed8;margin-bottom:4px\">Personalization hook used</div>\n    <div style=\"font-size:13px;color:#1e40af\">${esc(e.personalization_hook)}</div>\n  </div>` : ''}\n\n  <div style=\"background:#fff;padding:18px 26px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:10px\">Email</div>\n    <div style=\"font-size:15px;line-height:1.8;color:#1a1a1a;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:18px\">${emailBodyHtml}</div>\n  </div>\n\n  <div style=\"background:#fff;padding:14px 26px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:5px\">Personalization assessment</div>\n    <span style=\"background:${pqColor}22;color:${pqColor};font-size:12px;font-weight:700;padding:3px 10px;border-radius:10px\">${esc((e.personalization_quality||'?').replace(/_/g,' '))}</span>\n    <div style=\"font-size:13px;color:#6b7280;margin-top:6px\">${esc(e.personalization_quality_note)}</div>\n  </div>\n\n  ${researchItems ? `<div style=\"background:#fffbeb;padding:14px 26px;border:1px solid #fde68a\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#92400e;margin-bottom:8px\">Research before sending</div>\n    <ul style=\"padding-left:18px;margin:0\">${researchItems}</ul>\n  </div>` : ''}\n\n  ${e.follow_up_angle ? `<div style=\"background:#f0fdf4;padding:12px 26px;border:1px solid #bbf7d0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#15803d;margin-bottom:5px\">Follow-up angle</div>\n    <div style=\"font-size:14px;color:#166534;line-height:1.6\">${esc(e.follow_up_angle)}</div>\n  </div>` : ''}\n\n  <div style=\"background:#111827;color:#4b5563;font-size:11px;padding:10px 26px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Cold Email Personalizer \u00b7 ${esc(m.prospectName)} \u00b7 ${new Date().toLocaleDateString()}\n  </div>\n</div></body></html>`;\n\nreturn [{ json: { html, replyEmail: m.replyEmail, prospectName: m.prospectName, prospectCompany: m.prospectCompany, subjectLine: e.subject_line, personalizationQuality: e.personalization_quality, email: e } }];"
+      },
+      "id": "y4b7e1h3-0011",
+      "name": "Build Email Doc",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1940,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "ce",
+              "leftValue": "={{ $json.replyEmail }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "y4b7e1h3-0012",
+      "name": "Has Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.replyEmail}}",
+        "subject": "Cold email draft: {{ $json.prospectName }} at {{ $json.prospectCompany }} \u2014 {{ $json.personalizationQuality.replace(/_/g,' ') }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "y4b7e1h3-0013",
+      "name": "Email Draft",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2380,
+        220
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'written', prospect: $json.prospectName + ' at ' + $json.prospectCompany, subject_line: $json.subjectLine, personalization_quality: $json.personalizationQuality, emailed: $json.replyEmail ? true : false, email: $json.email } }}"
+      },
+      "id": "y4b7e1h3-0014",
+      "name": "Return Email",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2600,
+        280
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook \u2013 Personalize Email": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Research Needed?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Research Needed?": {
+      "main": [
+        [
+          {
+            "node": "Research Prospect",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skip Research",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Research Prospect": {
+      "main": [
+        [
+          {
+            "node": "Merge Research",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Research": {
+      "main": [
+        [
+          {
+            "node": "Claude Email Writer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip Research": {
+      "main": [
+        [
+          {
+            "node": "Claude Email Writer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Email Writer": {
+      "main": [
+        [
+          {
+            "node": "Parse Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Email": {
+      "main": [
+        [
+          {
+            "node": "Build Email Doc",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Email Doc": {
+      "main": [
+        [
+          {
+            "node": "Has Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Email?": {
+      "main": [
+        [
+          {
+            "node": "Email Draft",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Draft": {
+      "main": [
+        [
+          {
+            "node": "Return Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    "sales",
+    "email",
+    "outreach",
+    "personalization"
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-14T11:00:00.000Z",
+  "versionId": "v1.0.0"
+}
