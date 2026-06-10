@@ -1,0 +1,483 @@
+{
+  "name": "Newsletter Curator Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "weeksInterval": 1,
+              "triggerAtDay": [
+                1
+              ],
+              "triggerAtHour": 6,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "a6d9g3j5-0001",
+      "name": "Weekly Monday 6am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        200,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "curate-newsletter",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a6d9g3j5-0002",
+      "name": "Webhook \u2013 Manual Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.NEWSLETTER_SHEET_ID}}",
+        "sheetName": "Config",
+        "options": {}
+      },
+      "id": "a6d9g3j5-0003",
+      "name": "Load Config",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        420,
+        240
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(r => r.json).filter(r => r.key);\nconst config = {};\nfor (const row of rows) { config[row.key] = row.value; }\nreturn [{ json: {\n  newsletterName: config.newsletter_name || 'Weekly Digest',\n  topics: (config.topics || '').split(',').map(t => t.trim()).filter(Boolean),\n  recipientEmail: config.recipient_email || '',\n  fromName: config.from_name || 'Newsletter Bot',\n  tone: config.tone || 'informative',\n  itemCount: parseInt(config.items_per_issue) || 5,\n  includeAiCommentary: config.include_ai_commentary !== 'false',\n  audienceDescription: config.audience_description || ''\n} }];"
+      },
+      "id": "a6d9g3j5-0004",
+      "name": "Parse Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "a6d9g3j5-0005",
+      "name": "Loop Topics",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        860,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.tavily.com/search",
+        "sendBody": true,
+        "specifyBody": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "api_key",
+              "value": "={{$env.TAVILY_API_KEY}}"
+            },
+            {
+              "name": "query",
+              "value": "={{ $json }}"
+            },
+            {
+              "name": "search_depth",
+              "value": "basic"
+            },
+            {
+              "name": "max_results",
+              "value": 6
+            },
+            {
+              "name": "days",
+              "value": 7
+            }
+          ]
+        }
+      },
+      "id": "a6d9g3j5-0006",
+      "name": "Search Topic",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1060,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.NEWSLETTER_SHEET_ID}}",
+        "sheetName": "Raw Articles",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "fetched_at": "={{ $now.toISO() }}",
+            "topic": "={{ $('Loop Topics').first().json }}",
+            "titles": "={{ ($input.first().json?.results||[]).map(r=>r.title).join(' | ') }}",
+            "urls": "={{ ($input.first().json?.results||[]).map(r=>r.url).join(' | ') }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "a6d9g3j5-0007",
+      "name": "Log Raw Articles",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        1280,
+        160
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collect all search results from this and previous loop iterations\n// This runs after ALL topics have been searched\nconst config = $('Parse Config').first().json;\nconst allSearchResults = $('Search Topic').all();\nconst allItems = [];\nfor (const result of allSearchResults) {\n  const items = result.json?.results || [];\n  for (const item of items) {\n    allItems.push({\n      title: item.title,\n      url: item.url,\n      snippet: (item.content || item.snippet || '').slice(0, 400),\n      score: item.score || 0\n    });\n  }\n}\n// Deduplicate by URL\nconst seen = new Set();\nconst unique = allItems.filter(item => {\n  if (seen.has(item.url)) return false;\n  seen.add(item.url);\n  return true;\n});\nunique.sort((a,b) => b.score - a.score);\nreturn [{ json: { config, articles: unique.slice(0, 30), issueDate: new Date().toISOString().split('T')[0] } }];"
+      },
+      "id": "a6d9g3j5-0008",
+      "name": "Aggregate Articles",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.65,
+          "maxTokens": 2500
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You curate weekly newsletters. You select the most interesting and genuinely useful articles from a pool and write short, opinionated commentary on each one.\n\nGood newsletter curation:\n- Selects for quality and genuine interest, not recency alone\n- Rejects press releases, obvious SEO content, and listicles without substance\n- Adds editorial commentary that gives context or a point of view \u2014 not just a summary of the headline\n- Groups items thematically when there are natural clusters\n- Has a voice \u2014 not dry and neutral, but not try-hard either\n- Is short enough to actually read: 100-200 words per item max\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Curate this week's newsletter.\n\nNewsletter: {{ $json.config.newsletterName }}\nTopics covered: {{ $json.config.topics.join(', ') }}\nAudience: {{ $json.config.audienceDescription || 'general' }}\nTone: {{ $json.config.tone }}\nItems to select: {{ $json.config.itemCount }}\nIssue date: {{ $json.issueDate }}\nInclude AI commentary: {{ $json.config.includeAiCommentary }}\n\nAvailable articles this week:\n{{ $json.articles.map((a, i) => `${i+1}. ${a.title}\\n   URL: ${a.url}\\n   Preview: ${a.snippet}`).join('\\n\\n') }}\n\nReturn this JSON:\n{\n  \"issue_number_note\": \"week of issue date formatted nicely\",\n  \"editor_intro\": \"2-3 sentence intro from the editor \u2014 what's notable about this week's content, any theme, honest about if it was a slow week\",\n  \"selected_items\": [\n    {\n      \"rank\": 1,\n      \"title\": \"article title\",\n      \"url\": \"article url\",\n      \"why_selected\": \"one sentence \u2014 why this is worth reading\",\n      \"commentary\": \"2-4 sentences of editorial commentary \u2014 context, point of view, what to take away. Not a summary of the headline.\",\n      \"tag\": \"one word category tag\"\n    }\n  ],\n  \"quick_links\": [\n    { \"title\": \"title\", \"url\": \"url\", \"one_liner\": \"one line description\" }\n  ],\n  \"editors_pick\": 1,\n  \"closing_note\": \"1-2 sentence closing from the editor \u2014 can be casual, forward-looking, or a question to readers\"\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "a6d9g3j5-0009",
+      "name": "Claude Newsletter Curator",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        1720,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet newsletter;\ntry { newsletter = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst agg = $('Aggregate Articles').first().json;\nnewsletter._meta = { config: agg.config, issueDate: agg.issueDate };\nreturn [{ json: newsletter }];"
+      },
+      "id": "a6d9g3j5-0010",
+      "name": "Parse Newsletter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1940,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const n = $input.first().json;\nconst m = n._meta;\nconst config = m.config;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst itemBlocks = (n.selected_items||[]).map((item, idx) => {\n  const isEditorsPick = item.rank === n.editors_pick;\n  return `<div style=\"padding:20px 0;border-bottom:1px solid #f3f4f6${idx === 0 ? ';border-top:1px solid #f3f4f6' : ''}\">\n    ${isEditorsPick ? '<div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#f59e0b;margin-bottom:6px\">\u2605 Editor's Pick</div>' : ''}\n    <div style=\"display:flex;gap:8px;align-items:flex-start;margin-bottom:6px\">\n      <span style=\"background:#f3f4f6;color:#6b7280;font-size:11px;padding:2px 8px;border-radius:8px;white-space:nowrap;margin-top:2px\">${esc(item.tag||'')}</span>\n      <a href=\"${esc(item.url)}\" style=\"font-size:16px;font-weight:600;color:#1a1a1a;text-decoration:none;line-height:1.4\">${esc(item.title)}</a>\n    </div>\n    <div style=\"font-size:13px;color:#6b7280;margin-bottom:8px;font-style:italic\">${esc(item.why_selected)}</div>\n    <p style=\"font-size:14px;line-height:1.75;color:#374151;margin:0\">${esc(item.commentary)}</p>\n  </div>`;\n}).join('');\n\nconst quickLinks = (n.quick_links||[]).map(ql => `<div style=\"padding:8px 0;border-bottom:1px solid #f3f4f6\">\n  <a href=\"${esc(ql.url)}\" style=\"font-size:14px;font-weight:600;color:#2563eb;text-decoration:none\">${esc(ql.title)}</a>\n  <span style=\"font-size:13px;color:#6b7280;margin-left:6px\">\u2014 ${esc(ql.one_liner)}</span>\n</div>`).join('');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>${esc(config.newsletterName)}</title></head>\n<body style=\"margin:0;padding:0;background:#f9f9f7;font-family:Georgia,'Times New Roman',serif\">\n<div style=\"max-width:600px;margin:0 auto;padding:16px\">\n  <div style=\"background:#1a1a1a;color:#fff;padding:28px 32px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:22px;font-weight:700;letter-spacing:-0.3px\">${esc(config.newsletterName)}</div>\n    <div style=\"font-size:13px;color:#9ca3af;margin-top:4px\">${esc(n.issue_number_note||m.issueDate)}</div>\n  </div>\n  <div style=\"background:#fff;padding:24px 32px;border:1px solid #e5e5e3;border-top:none\">\n    <p style=\"font-size:15px;line-height:1.8;color:#374151;margin:0\">${esc(n.editor_intro)}</p>\n  </div>\n  <div style=\"background:#fff;padding:0 32px;border:1px solid #e5e5e3;border-top:none\">\n    ${itemBlocks}\n  </div>\n  ${quickLinks ? `<div style=\"background:#f8f8f6;padding:18px 32px;border:1px solid #e5e5e3;border-top:none\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:10px\">Quick links</div>\n    ${quickLinks}\n  </div>` : ''}\n  <div style=\"background:#fff;padding:18px 32px;border:1px solid #e5e5e3;border-top:3px solid #f3f3f0\">\n    <p style=\"font-size:14px;line-height:1.75;color:#6b7280;margin:0;font-style:italic\">${esc(n.closing_note)}</p>\n  </div>\n  <div style=\"background:#1a1a1a;color:#4b5563;font-size:11px;padding:14px 32px;border-radius:0 0 10px 10px;text-align:center;font-family:sans-serif\">\n    ${esc(config.newsletterName)} \u00b7 ${esc(m.issueDate)} \u00b7 ${(n.selected_items||[]).length} articles curated\n  </div>\n</div></body></html>`;\n\nreturn [{ json: { html, recipientEmail: config.recipientEmail, newsletterName: config.newsletterName, issueDate: m.issueDate, itemCount: (n.selected_items||[]).length, newsletter: n } }];"
+      },
+      "id": "a6d9g3j5-0011",
+      "name": "Build Newsletter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "ce",
+              "leftValue": "={{ $json.recipientEmail }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "a6d9g3j5-0012",
+      "name": "Has Recipient?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2380,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.recipientEmail}}",
+        "subject": "{{ $json.newsletterName }} \u2014 {{ $json.issueDate }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "a6d9g3j5-0013",
+      "name": "Send Newsletter",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2600,
+        180
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'curated', newsletter: $json.newsletterName, issue_date: $json.issueDate, items_selected: $json.itemCount, sent: $json.recipientEmail ? true : false } }}"
+      },
+      "id": "a6d9g3j5-0014",
+      "name": "Return Result",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2600,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nreturn [{ json: { manualTrigger: true, overrides: body } }];"
+      },
+      "id": "a6d9g3j5-0015",
+      "name": "Parse Manual",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        480
+      ]
+    }
+  ],
+  "connections": {
+    "Weekly Monday 6am": {
+      "main": [
+        [
+          {
+            "node": "Load Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Config": {
+      "main": [
+        [
+          {
+            "node": "Parse Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Config": {
+      "main": [
+        [
+          {
+            "node": "Loop Topics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Topics": {
+      "main": [
+        [
+          {
+            "node": "Search Topic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Topic": {
+      "main": [
+        [
+          {
+            "node": "Log Raw Articles",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Aggregate Articles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Articles": {
+      "main": [
+        [
+          {
+            "node": "Claude Newsletter Curator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Newsletter Curator": {
+      "main": [
+        [
+          {
+            "node": "Parse Newsletter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Newsletter": {
+      "main": [
+        [
+          {
+            "node": "Build Newsletter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Newsletter": {
+      "main": [
+        [
+          {
+            "node": "Has Recipient?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Recipient?": {
+      "main": [
+        [
+          {
+            "node": "Send Newsletter",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Newsletter": {
+      "main": [
+        [
+          {
+            "node": "Return Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook \u2013 Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Parse Manual",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Manual": {
+      "main": [
+        [
+          {
+            "node": "Load Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    "newsletter",
+    "content",
+    "curation",
+    "email"
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2025-05-15T10:00:00.000Z",
+  "versionId": "v1.0.0"
+}

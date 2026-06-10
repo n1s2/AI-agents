@@ -1,0 +1,312 @@
+{
+  "name": "Job Description Writer Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "write-jd",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "z5c8f2i4-0001",
+      "name": "Webhook \u2013 Generate JD",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['job_title', 'department', 'company_description'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nconst levels = ['intern', 'junior', 'mid', 'senior', 'staff', 'principal', 'manager', 'director', 'vp', 'c_level'];\nconst level = levels.includes(body.seniority_level) ? body.seniority_level : 'mid';\nconst workTypes = ['remote', 'hybrid', 'onsite'];\nconst workType = workTypes.includes(body.work_type) ? body.work_type : 'hybrid';\nreturn [{ json: {\n  valid: true,\n  jobTitle: body.job_title.trim(),\n  department: body.department.trim(),\n  seniorityLevel: level,\n  workType,\n  location: body.location || '',\n  companyDescription: body.company_description.trim().slice(0, 600),\n  companyStage: body.company_stage || '',\n  teamContext: (body.team_context || '').slice(0, 500),\n  coreResponsibilities: Array.isArray(body.core_responsibilities)\n    ? body.core_responsibilities\n    : (body.core_responsibilities || '').split('\n').map(r => r.trim()).filter(Boolean),\n  mustHaveSkills: Array.isArray(body.must_have_skills)\n    ? body.must_have_skills\n    : (body.must_have_skills || '').split(',').map(s => s.trim()).filter(Boolean),\n  niceToHaveSkills: Array.isArray(body.nice_to_have_skills)\n    ? body.nice_to_have_skills\n    : (body.nice_to_have_skills || '').split(',').map(s => s.trim()).filter(Boolean),\n  salaryRange: body.salary_range || '',\n  currency: body.currency || 'USD',\n  benefits: Array.isArray(body.benefits)\n    ? body.benefits\n    : (body.benefits || '').split(',').map(b => b.trim()).filter(Boolean),\n  avoidBiasedLanguage: body.avoid_biased_language !== false,\n  tone: body.tone || 'professional',\n  replyEmail: body.reply_email || null,\n  requestedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "z5c8f2i4-0002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cv",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "z5c8f2i4-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "z5c8f2i4-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.6,
+          "maxTokens": 2800
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You write job descriptions that attract strong candidates and discourage poor fits. You know that most JDs are too long, full of corporate jargon, loaded with requirements that aren't really necessary, and written entirely from the company's perspective rather than the candidate's.\n\nGood job descriptions:\n- Lead with what makes the role and company interesting, not boilerplate\n- Describe what the person will actually do, not a list of responsibilities that could apply to any company\n- Separate must-haves from nice-to-haves honestly \u2014 don't pad the requirements\n- Use inclusive language (avoid gendered terms, avoid unnecessarily exclusive requirements like degree requirements when experience works just as well)\n- Are honest about challenges and what makes this role hard\n- Sell the role without overselling it \u2014 candidates who accept an oversold role leave faster\n\nIf `avoid_biased_language` is true: avoid masculine-coded words (ninja, rockstar, crushing it), avoid unnecessary degree requirements, avoid experience inflation (don't require 5 years for a mid-level role), use gender-neutral language throughout.\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Write a job description.\n\nRole: {{ $json.jobTitle }}\nDepartment: {{ $json.department }}\nSeniority: {{ $json.seniorityLevel }}\nWork type: {{ $json.workType }}{{ $json.location ? ' \u2014 ' + $json.location : '' }}\nCompany stage: {{ $json.companyStage || 'not specified' }}\nTone: {{ $json.tone }}\nAvoid biased language: {{ $json.avoidBiasedLanguage }}\n\nCompany description:\n{{ $json.companyDescription }}\n\nTeam context (what team/org this reports into):\n{{ $json.teamContext || 'not provided' }}\n\nCore responsibilities:\n{{ $json.coreResponsibilities.map((r,i) => `${i+1}. ${r}`).join('\\n') || 'not specified \u2014 infer from role title and department' }}\n\nMust-have skills/requirements:\n{{ $json.mustHaveSkills.join(', ') || 'not specified \u2014 infer from role' }}\n\nNice-to-have skills:\n{{ $json.niceToHaveSkills.join(', ') || 'none specified' }}\n\nSalary range: {{ $json.salaryRange || 'not specified' }}\nBenefits: {{ $json.benefits.join(', ') || 'not specified' }}\n\nReturn this JSON:\n{\n  \"job_title_display\": \"final job title \u2014 clean, searchable, no internal codes\",\n  \"headline\": \"one-line hook that makes a strong candidate lean forward \u2014 what makes this role genuinely interesting\",\n  \"sections\": {\n    \"about_the_company\": \"2-3 sentences. What does the company do, who are their customers, what stage are they at. Honest and specific \u2014 not marketing copy.\",\n    \"about_the_role\": \"2-3 paragraphs. What will this person actually spend their time doing? What problems will they solve? What does success look like at 6 months?\",\n    \"what_youll_do\": [\"5-8 specific responsibilities \u2014 use action verbs, be concrete, avoid vague phrases like 'support the team'\"],\n    \"what_were_looking_for\": [\"5-7 must-have requirements \u2014 specific and honest. No inflated requirements.\"],\n    \"bonus_points\": [\"3-5 genuinely nice-to-have skills \u2014 not required\"],\n    \"what_we_offer\": [\"5-7 benefits/perks \u2014 include salary if provided, include meaningful ones not just 'competitive salary'\"],\n    \"honest_challenges\": \"1-2 sentences about what's genuinely hard about this role or this stage of the company \u2014 candidates appreciate honesty and it filters for the right people\"\n  },\n  \"full_jd_text\": \"the complete job description as a single formatted string with section headers and line breaks \u2014 ready to paste into a job board\",\n  \"bias_flags\": [\"if avoid_biased_language is true: any language in the JD that could discourage qualified candidates \u2014 empty if clean\"],\n  \"searchability_notes\": \"whether the job title and keywords will perform well on job boards \u2014 any suggestions\",\n  \"interview_signal\": \"based on this JD, what's the single most important thing to assess in first-round interviews\"\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "z5c8f2i4-0005",
+      "name": "Claude JD Writer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        860,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet jd;\ntry { jd = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst input = $('Validate Input').first().json;\njd._meta = { jobTitle: input.jobTitle, department: input.department, seniorityLevel: input.seniorityLevel, workType: input.workType, location: input.location, replyEmail: input.replyEmail };\nreturn [{ json: jd }];"
+      },
+      "id": "z5c8f2i4-0006",
+      "name": "Parse JD",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nconst m = j._meta;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst s = j.sections || {};\nconst responsibilities = (s.what_youll_do||[]).map(r => `<li style=\"font-size:14px;margin-bottom:8px;line-height:1.55\">${esc(r)}</li>`).join('');\nconst requirements = (s.what_were_looking_for||[]).map(r => `<li style=\"font-size:14px;margin-bottom:8px;line-height:1.55\">${esc(r)}</li>`).join('');\nconst bonus = (s.bonus_points||[]).map(b => `<li style=\"font-size:14px;margin-bottom:7px;line-height:1.55;color:#4b5563\">${esc(b)}</li>`).join('');\nconst offers = (s.what_we_offer||[]).map(o => `<div style=\"font-size:14px;padding:6px 0;border-bottom:1px solid #f0fdf4\">\u2713 ${esc(o)}</div>`).join('');\nconst biasFlags = (j.bias_flags||[]).map(f => `<li style=\"font-size:13px;margin-bottom:5px;color:#7f1d1d\">${esc(f)}</li>`).join('');\n\nconst workTypeColors = {remote:'#16a34a', hybrid:'#2563eb', onsite:'#d97706'};\nconst wtColor = workTypeColors[m.workType] || '#6b7280';\nconst levelLabel = m.seniorityLevel.replace(/_/g,' ').replace(/\b\\w/g, c => c.toUpperCase());\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f9fafb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111\">\n<div style=\"max-width:680px;margin:0 auto\">\n  <div style=\"background:#1e293b;color:#fff;padding:22px 28px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#64748b;margin-bottom:5px\">${esc(m.department)} \u00b7 ${esc(levelLabel)}</div>\n    <div style=\"font-size:21px;font-weight:700\">${esc(j.job_title_display||m.jobTitle)}</div>\n    <div style=\"display:flex;gap:8px;margin-top:8px;flex-wrap:wrap\">\n      <span style=\"background:${wtColor}33;color:${wtColor};font-size:12px;font-weight:600;padding:3px 10px;border-radius:10px\">${esc(m.workType)}</span>\n      ${m.location ? `<span style=\"background:#f1f5f9;color:#475569;font-size:12px;padding:3px 10px;border-radius:10px\">${esc(m.location)}</span>` : ''}\n    </div>\n    <div style=\"font-size:14px;color:#94a3b8;margin-top:10px;font-style:italic\">${esc(j.headline)}</div>\n  </div>\n  <div style=\"background:#fff;padding:20px 28px;border:1px solid #e5e7eb;border-top:none\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:8px\">About the company</div>\n    <p style=\"font-size:14px;line-height:1.75;color:#374151;margin:0\">${esc(s.about_the_company)}</p>\n  </div>\n  <div style=\"background:#fff;padding:20px 28px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:8px\">About the role</div>\n    <div style=\"font-size:14px;line-height:1.8;color:#374151;white-space:pre-line\">${esc(s.about_the_role)}</div>\n  </div>\n  ${responsibilities ? `<div style=\"background:#fff;padding:20px 28px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:10px\">What you'll do</div>\n    <ul style=\"padding-left:18px;margin:0\">${responsibilities}</ul>\n  </div>` : ''}\n  ${requirements ? `<div style=\"background:#fff;padding:20px 28px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:10px\">What we're looking for</div>\n    <ul style=\"padding-left:18px;margin:0\">${requirements}</ul>\n  </div>` : ''}\n  ${bonus ? `<div style=\"background:#fff;padding:20px 28px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:10px\">Bonus points</div>\n    <ul style=\"padding-left:18px;margin:0\">${bonus}</ul>\n  </div>` : ''}\n  ${s.honest_challenges ? `<div style=\"background:#fffbeb;padding:14px 28px;border:1px solid #fde68a\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#92400e;margin-bottom:6px\">Honest about the challenges</div>\n    <p style=\"font-size:14px;color:#78350f;line-height:1.65;margin:0\">${esc(s.honest_challenges)}</p>\n  </div>` : ''}\n  ${offers ? `<div style=\"background:#f0fdf4;padding:16px 28px;border:1px solid #bbf7d0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#15803d;margin-bottom:8px\">What we offer</div>\n    ${offers}\n  </div>` : ''}\n  ${biasFlags ? `<div style=\"background:#fef2f2;padding:14px 28px;border:1px solid #fecaca\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#b91c1c;margin-bottom:7px\">Potential bias flags \u2014 review before posting</div>\n    <ul style=\"padding-left:18px;margin:0\">${biasFlags}</ul>\n  </div>` : ''}\n  <div style=\"background:#fff;padding:14px 28px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:5px\">Interview signal</div>\n    <div style=\"font-size:14px;color:#374151;line-height:1.6\">${esc(j.interview_signal)}</div>\n    ${j.searchability_notes ? `<div style=\"font-size:13px;color:#6b7280;margin-top:8px;background:#f9fafb;padding:8px 12px;border-radius:4px\">${esc(j.searchability_notes)}</div>` : ''}\n  </div>\n  <div style=\"background:#1e293b;color:#475569;font-size:11px;padding:12px 28px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    JD Writer \u00b7 ${esc(j.job_title_display||m.jobTitle)} \u00b7 ${new Date().toLocaleDateString()}\n  </div>\n</div></body></html>`;\n\nreturn [{ json: { html, replyEmail: m.replyEmail, jobTitle: j.job_title_display||m.jobTitle, department: m.department, jd: j } }];"
+      },
+      "id": "z5c8f2i4-0007",
+      "name": "Build JD Doc",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "ce",
+              "leftValue": "={{ $json.replyEmail }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "z5c8f2i4-0008",
+      "name": "Has Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.replyEmail}}",
+        "subject": "JD draft: {{ $json.jobTitle }} \u00b7 {{ $json.department }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "z5c8f2i4-0009",
+      "name": "Email JD",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1740,
+        180
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'written', job_title: $json.jobTitle, department: $json.department, emailed: $json.replyEmail ? true : false, jd: $json.jd } }}"
+      },
+      "id": "z5c8f2i4-0010",
+      "name": "Return JD",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1960,
+        240
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook \u2013 Generate JD": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Claude JD Writer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude JD Writer": {
+      "main": [
+        [
+          {
+            "node": "Parse JD",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse JD": {
+      "main": [
+        [
+          {
+            "node": "Build JD Doc",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build JD Doc": {
+      "main": [
+        [
+          {
+            "node": "Has Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Email?": {
+      "main": [
+        [
+          {
+            "node": "Email JD",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return JD",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email JD": {
+      "main": [
+        [
+          {
+            "node": "Return JD",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    "hr",
+    "recruiting",
+    "hiring",
+    "job-description"
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-15T09:00:00.000Z",
+  "versionId": "v1.0.0"
+}

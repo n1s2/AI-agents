@@ -1,0 +1,435 @@
+{
+  "name": "Vendor Evaluation Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "evaluate-vendor",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "b7e1h4k6-0001",
+      "name": "Webhook \u2013 Submit Evaluation",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['vendor_name', 'category', 'use_case', 'evaluation_criteria'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nif (!Array.isArray(body.evaluation_criteria) || body.evaluation_criteria.length < 2) {\n  return [{ json: { valid: false, error: 'evaluation_criteria must be an array with at least 2 items' } }];\n}\nconst criteria = body.evaluation_criteria.map(c => ({\n  name: (typeof c === 'string') ? c : c.name,\n  weight: (typeof c === 'object' && c.weight) ? parseFloat(c.weight) : 1,\n  score: (typeof c === 'object' && c.score !== undefined) ? parseFloat(c.score) : null,\n  notes: (typeof c === 'object' && c.notes) ? c.notes : ''\n}));\nconst totalWeight = criteria.reduce((s,c) => s + c.weight, 0);\ncriteria.forEach(c => c.normalizedWeight = parseFloat((c.weight / totalWeight * 100).toFixed(1)));\nconst scoredCriteria = criteria.filter(c => c.score !== null);\nlet weightedScore = null;\nif (scoredCriteria.length === criteria.length) {\n  weightedScore = parseFloat(criteria.reduce((s,c) => s + (c.score * c.normalizedWeight / 100), 0).toFixed(1));\n}\nreturn [{ json: {\n  valid: true,\n  vendorName: body.vendor_name.trim(),\n  vendorUrl: body.vendor_url || '',\n  category: body.category.trim(),\n  useCase: body.use_case.trim().slice(0, 600),\n  evaluationCriteria: criteria,\n  weightedScore,\n  budget: body.budget || '',\n  currency: body.currency || 'USD',\n  alternatives: Array.isArray(body.alternatives) ? body.alternatives.slice(0, 4) : (body.alternatives || '').split(',').map(a=>a.trim()).filter(Boolean).slice(0,4),\n  teamSize: body.team_size || '',\n  integrationRequirements: (body.integration_requirements || '').slice(0, 400),\n  securityRequirements: (body.security_requirements || '').slice(0, 300),\n  additionalContext: (body.additional_context || '').slice(0, 500),\n  replyEmail: body.reply_email || null,\n  requestedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "b7e1h4k6-0002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cv",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "b7e1h4k6-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "b7e1h4k6-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.tavily.com/search",
+        "sendBody": true,
+        "specifyBody": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "api_key",
+              "value": "={{$env.TAVILY_API_KEY}}"
+            },
+            {
+              "name": "query",
+              "value": "={{ $json.vendorName }} {{ $json.category }} review pros cons {{ new Date().getFullYear() }}"
+            },
+            {
+              "name": "search_depth",
+              "value": "basic"
+            },
+            {
+              "name": "max_results",
+              "value": 5
+            }
+          ]
+        }
+      },
+      "id": "b7e1h4k6-0005",
+      "name": "Research Vendor",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        860,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.tavily.com/search",
+        "sendBody": true,
+        "specifyBody": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "api_key",
+              "value": "={{$env.TAVILY_API_KEY}}"
+            },
+            {
+              "name": "query",
+              "value": "={{ $json.alternatives.join(' vs ') }} vs {{ $json.vendorName }} comparison {{ $json.category }}"
+            },
+            {
+              "name": "search_depth",
+              "value": "basic"
+            },
+            {
+              "name": "max_results",
+              "value": 4
+            }
+          ]
+        }
+      },
+      "id": "b7e1h4k6-0006",
+      "name": "Research Alternatives",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        860,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const vendorSearch = $('Research Vendor').first().json?.results || [];\nconst altSearch = $('Research Alternatives').first().json?.results || [];\nconst input = $('Validate Input').first().json;\nconst vendorContext = vendorSearch.map(r => `${r.title}: ${(r.content||r.snippet||'').slice(0,350)}`).join('\\n\\n');\nconst altContext = altSearch.map(r => `${r.title}: ${(r.content||r.snippet||'').slice(0,300)}`).join('\\n\\n');\nreturn [{ json: { input, vendorContext, altContext } }];"
+      },
+      "id": "b7e1h4k6-0007",
+      "name": "Merge Research",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1060,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.4,
+          "maxTokens": 2500
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You evaluate vendors and software tools for businesses. You give specific, evidence-based assessments \u2014 not vague \"it depends\" answers. You know that vendor evaluations need to connect research to the specific use case, not just report general pros and cons.\n\nYou distinguish between marketing claims and evidence from real users. You flag red flags: vendor lock-in, opaque pricing, recent acquisition instability, weak support, poor documentation.\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Evaluate this vendor for the described use case.\n\nVendor: {{ $json.input.vendorName }}{{ $json.input.vendorUrl ? ' (' + $json.input.vendorUrl + ')' : '' }}\nCategory: {{ $json.input.category }}\nUse case: {{ $json.input.useCase }}\nBudget: {{ $json.input.budget || 'not specified' }}\nTeam size: {{ $json.input.teamSize || 'not specified' }}\nAlternatives being considered: {{ $json.input.alternatives.join(', ') || 'none specified' }}\nIntegration requirements: {{ $json.input.integrationRequirements || 'none specified' }}\nSecurity requirements: {{ $json.input.securityRequirements || 'none specified' }}\nAdditional context: {{ $json.input.additionalContext || 'none' }}\n\nEvaluation criteria with weights:\n{{ $json.input.evaluationCriteria.map(c => `- ${c.name} (weight: ${c.normalizedWeight}%): ${c.score !== null ? 'pre-scored ' + c.score + '/10' : 'needs scoring'}${c.notes ? ' \u2014 ' + c.notes : ''}`).join('\\n') }}\n\nCurrent weighted score (if all criteria scored): {{ $json.input.weightedScore || 'not all criteria scored yet' }}\n\nVendor research:\n{{ $json.vendorContext }}\n\nAlternatives comparison research:\n{{ $json.altContext }}\n\nReturn this JSON:\n{\n  \"overall_verdict\": \"one of: strong_fit | good_fit | acceptable | poor_fit | not_recommended\",\n  \"confidence\": \"high | medium | low\",\n  \"executive_summary\": \"3-4 sentences \u2014 what this vendor is, how it fits the use case, and the bottom-line recommendation\",\n  \"criteria_assessments\": [\n    {\n      \"criterion\": \"criterion name\",\n      \"score_suggestion\": 7.5,\n      \"evidence\": \"specific evidence from research supporting this score\",\n      \"use_case_relevance\": \"how this criterion applies specifically to their use case\"\n    }\n  ],\n  \"strengths\": [\"specific strengths relevant to this use case \u2014 not generic praise\"],\n  \"weaknesses\": [\"specific weaknesses \u2014 honest about gaps\"],\n  \"red_flags\": [\"anything that should give serious pause \u2014 empty if none\"],\n  \"vs_alternatives\": [\n    {\n      \"alternative\": \"competitor name\",\n      \"comparison\": \"1-2 sentences on key difference and when to choose this vendor vs that alternative\"\n    }\n  ],\n  \"implementation_considerations\": \"what getting started actually looks like \u2014 onboarding, migration, typical timeline\",\n  \"cost_assessment\": \"honest assessment of total cost including setup, training, potential overages \u2014 not just license price\",\n  \"questions_for_vendor\": [\"4-6 specific questions to ask in a demo or sales call \u2014 based on the evaluation gaps\"],\n  \"suggested_poc_criteria\": [\"3-4 specific things to test in a proof of concept or trial \u2014 concrete, not vague\"]\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "b7e1h4k6-0008",
+      "name": "Claude Vendor Evaluator",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        1280,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet evaluation;\ntry { evaluation = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst input = $('Validate Input').first().json;\nevaluation._meta = { vendorName: input.vendorName, category: input.category, useCase: input.useCase, weightedScore: input.weightedScore, currency: input.currency, replyEmail: input.replyEmail };\nreturn [{ json: evaluation }];"
+      },
+      "id": "b7e1h4k6-0009",
+      "name": "Parse Evaluation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const e = $input.first().json;\nconst m = e._meta;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nconst verdictConfig = {\n  strong_fit:        {color:'#16a34a', bg:'#f0fdf4', label:'Strong Fit \u2713'},\n  good_fit:          {color:'#2563eb', bg:'#eff6ff', label:'Good Fit'},\n  acceptable:        {color:'#d97706', bg:'#fffbeb', label:'Acceptable'},\n  poor_fit:          {color:'#ea580c', bg:'#fff7ed', label:'Poor Fit'},\n  not_recommended:   {color:'#dc2626', bg:'#fef2f2', label:'Not Recommended \u2717'}\n};\nconst vc = verdictConfig[e.overall_verdict] || verdictConfig.acceptable;\nconst confColor = {high:'#16a34a', medium:'#d97706', low:'#dc2626'};\n\nconst criteriaRows = (e.criteria_assessments||[]).map(c => {\n  const score = c.score_suggestion;\n  const barWidth = Math.round((score||0) / 10 * 100);\n  return `<div style=\"padding:10px 0;border-bottom:1px solid #f3f4f6\">\n    <div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:4px\">\n      <span style=\"font-size:14px;font-weight:600\">${esc(c.criterion)}</span>\n      <span style=\"font-size:15px;font-weight:700;color:${score>=7?'#16a34a':score>=5?'#d97706':'#dc2626'}\">${score||'?'}/10</span>\n    </div>\n    <div style=\"background:#f3f4f6;border-radius:4px;height:6px;margin-bottom:6px\"><div style=\"background:${score>=7?'#16a34a':score>=5?'#d97706':'#dc2626'};height:6px;border-radius:4px;width:${barWidth}%\"></div></div>\n    <div style=\"font-size:12px;color:#6b7280;line-height:1.5\">${esc(c.evidence)}</div>\n  </div>`;\n}).join('');\n\nconst strengths = (e.strengths||[]).map(s => `<div style=\"font-size:14px;padding:6px 0;border-bottom:1px solid #f0fdf4;color:#166534\">+ ${esc(s)}</div>`).join('');\nconst weaknesses = (e.weaknesses||[]).map(w => `<div style=\"font-size:14px;padding:6px 0;border-bottom:1px solid #fef9c3;color:#78350f\">\u2212 ${esc(w)}</div>`).join('');\nconst redFlags = (e.red_flags||[]).map(f => `<div style=\"font-size:14px;padding:5px 0;color:#7f1d1d\">\u26a0 ${esc(f)}</div>`).join('');\nconst vsAlts = (e.vs_alternatives||[]).map(a => `<div style=\"padding:9px 0;border-bottom:1px solid #f3f4f6\"><div style=\"font-size:14px;font-weight:600\">${esc(a.alternative)}</div><div style=\"font-size:13px;color:#555;margin-top:3px\">${esc(a.comparison)}</div></div>`).join('');\nconst questions = (e.questions_for_vendor||[]).map((q,i) => `<div style=\"font-size:14px;padding:6px 0;border-bottom:1px solid #f0f9ff;color:#1e40af\">${i+1}. ${esc(q)}</div>`).join('');\nconst pocItems = (e.suggested_poc_criteria||[]).map(p => `<li style=\"font-size:14px;margin-bottom:7px;line-height:1.5\">${esc(p)}</li>`).join('');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f9fafb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111\">\n<div style=\"max-width:700px;margin:0 auto\">\n  <div style=\"background:#111827;color:#fff;padding:20px 28px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#6b7280;margin-bottom:5px\">Vendor Evaluation \u00b7 ${esc(m.category)}</div>\n    <div style=\"font-size:20px;font-weight:700\">${esc(m.vendorName)}</div>\n    <div style=\"font-size:13px;color:#9ca3af;margin-top:3px\">${esc(m.useCase.slice(0,100))}${m.useCase.length>100?'...':''}</div>\n  </div>\n  <div style=\"background:${vc.bg};padding:14px 28px;border:1px solid ${vc.color}44;border-top:none;display:flex;align-items:center;justify-content:space-between\">\n    <div>\n      <span style=\"background:${vc.color};color:#fff;font-size:13px;font-weight:700;padding:4px 14px;border-radius:14px\">${vc.label}</span>\n      <span style=\"font-size:12px;color:${confColor[e.confidence]||'#6b7280'};margin-left:10px\">${esc(e.confidence)} confidence</span>\n    </div>\n    ${m.weightedScore ? `<div style=\"text-align:right\"><div style=\"font-size:11px;color:#9ca3af\">Weighted score</div><div style=\"font-size:24px;font-weight:800\">${m.weightedScore}/10</div></div>` : ''}\n  </div>\n  <div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:none\">\n    <p style=\"font-size:15px;line-height:1.75;color:#374151;margin:0\">${esc(e.executive_summary)}</p>\n  </div>\n  ${criteriaRows ? `<div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:10px\">Criteria scores</div>\n    ${criteriaRows}\n  </div>` : ''}\n  <div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"display:grid;grid-template-columns:1fr 1fr;gap:20px\">\n      ${strengths ? `<div><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#15803d;margin-bottom:7px\">Strengths</div>${strengths}</div>` : ''}\n      ${weaknesses ? `<div><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#92400e;margin-bottom:7px\">Weaknesses</div>${weaknesses}</div>` : ''}\n    </div>\n  </div>\n  ${redFlags ? `<div style=\"background:#fef2f2;padding:14px 28px;border:1px solid #fecaca\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#b91c1c;margin-bottom:7px\">Red flags</div>\n    ${redFlags}\n  </div>` : ''}\n  ${vsAlts ? `<div style=\"background:#fff;padding:14px 28px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:8px\">vs. alternatives</div>\n    ${vsAlts}\n  </div>` : ''}\n  <div style=\"background:#fff;padding:14px 28px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:6px\">Implementation & cost</div>\n    <div style=\"font-size:14px;color:#374151;line-height:1.65;margin-bottom:8px\">${esc(e.implementation_considerations)}</div>\n    <div style=\"font-size:14px;color:#374151;line-height:1.65\">${esc(e.cost_assessment)}</div>\n  </div>\n  ${questions ? `<div style=\"background:#eff6ff;padding:14px 28px;border:1px solid #bfdbfe\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#1d4ed8;margin-bottom:7px\">Ask in the demo</div>\n    ${questions}\n  </div>` : ''}\n  ${pocItems ? `<div style=\"background:#fff;padding:14px 28px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:7px\">What to test in POC</div>\n    <ul style=\"padding-left:18px;margin:0\">${pocItems}</ul>\n  </div>` : ''}\n  <div style=\"background:#111827;color:#4b5563;font-size:11px;padding:12px 28px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Vendor Evaluator \u00b7 ${esc(m.vendorName)} \u00b7 ${new Date().toLocaleDateString()}\n  </div>\n</div></body></html>`;\n\nreturn [{ json: { html, replyEmail: m.replyEmail, vendorName: m.vendorName, verdict: e.overall_verdict, weightedScore: m.weightedScore, evaluation: e } }];"
+      },
+      "id": "b7e1h4k6-0010",
+      "name": "Build Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1720,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "ce",
+              "leftValue": "={{ $json.replyEmail }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "b7e1h4k6-0011",
+      "name": "Has Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1940,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.replyEmail}}",
+        "subject": "Vendor eval: {{ $json.vendorName }} \u2014 {{ $json.verdict.replace(/_/g,' ') }}{{ $json.weightedScore ? ' (' + $json.weightedScore + '/10)' : '' }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "b7e1h4k6-0012",
+      "name": "Email Report",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2160,
+        220
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'evaluated', vendor: $json.vendorName, verdict: $json.verdict, weighted_score: $json.weightedScore, emailed: $json.replyEmail ? true : false, evaluation: $json.evaluation } }}"
+      },
+      "id": "b7e1h4k6-0013",
+      "name": "Return Evaluation",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2380,
+        280
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook \u2013 Submit Evaluation": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Research Vendor",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Research Alternatives",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Research Vendor": {
+      "main": [
+        [
+          {
+            "node": "Merge Research",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Research Alternatives": {
+      "main": [
+        [
+          {
+            "node": "Merge Research",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Research": {
+      "main": [
+        [
+          {
+            "node": "Claude Vendor Evaluator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Vendor Evaluator": {
+      "main": [
+        [
+          {
+            "node": "Parse Evaluation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Evaluation": {
+      "main": [
+        [
+          {
+            "node": "Build Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Report": {
+      "main": [
+        [
+          {
+            "node": "Has Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Email?": {
+      "main": [
+        [
+          {
+            "node": "Email Report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Evaluation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Report": {
+      "main": [
+        [
+          {
+            "node": "Return Evaluation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    "procurement",
+    "vendors",
+    "software",
+    "evaluation"
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-15T11:00:00.000Z",
+  "versionId": "v1.0.0"
+}
