@@ -1,0 +1,312 @@
+{
+  "name": "Legal Document Summarizer Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "summarize-legal",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "d9g3j6m8-0001",
+      "name": "Webhook \u2013 Submit Document",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['document_text', 'document_type'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nif (body.document_text.trim().length < 100) return [{ json: { valid: false, error: 'document_text too short' } }];\nconst docTypes = ['contract', 'nda', 'terms_of_service', 'privacy_policy', 'employment_agreement', 'lease', 'software_license', 'partnership_agreement', 'service_agreement', 'settlement', 'other'];\nconst docType = docTypes.includes(body.document_type) ? body.document_type : 'other';\nconst audiences = ['founder', 'non_lawyer_business', 'employee', 'technical_team', 'general'];\nconst audience = audiences.includes(body.audience) ? body.audience : 'non_lawyer_business';\nreturn [{ json: {\n  valid: true,\n  documentText: body.document_text.trim().slice(0, 15000),\n  documentType: docType,\n  documentTitle: body.document_title || '',\n  audience,\n  partyRole: body.party_role || '',\n  specificConcerns: (body.specific_concerns || '').slice(0, 400),\n  jurisdiction: body.jurisdiction || '',\n  replyEmail: body.reply_email || null,\n  requestedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "d9g3j6m8-0002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cv",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "d9g3j6m8-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "d9g3j6m8-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.2,
+          "maxTokens": 3000
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You summarize legal documents for non-lawyers. You make complex legal language accessible without losing accuracy.\n\nYour job is to:\n- Extract what the document actually does \u2014 the obligations, rights, restrictions, and risks\n- Flag clauses that are unusual, one-sided, or potentially problematic\n- Explain consequences of key provisions in plain language\n- Identify what the reader needs to pay attention to before signing\n- Note what's missing that would typically appear in this document type\n\nYou calibrate to the audience: a founder reading a term sheet needs different emphasis than an employee reading an employment agreement.\n\nYou are not a lawyer. You don't give legal advice. You make the document comprehensible so the reader can have an informed conversation with their lawyer.\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Summarize this legal document.\n\nDocument type: {{ $json.documentType.replace(/_/g,' ') }}\nDocument title: {{ $json.documentTitle || 'not provided' }}\nReader's role/party: {{ $json.partyRole || 'not specified' }}\nAudience: {{ $json.audience.replace(/_/g,' ') }}\nJurisdiction: {{ $json.jurisdiction || 'not specified' }}\nSpecific concerns: {{ $json.specificConcerns || 'none' }}\n\nDocument text:\n{{ $json.documentText }}\n\nReturn this JSON:\n{\n  \"document_overview\": \"2-3 sentences: what this document is, who the parties are, and what it accomplishes\",\n  \"plain_english_summary\": \"4-6 sentences: what this document means in plain language for someone in the reader's position \u2014 what they're agreeing to, what they get, what they give up\",\n  \"key_provisions\": [\n    {\n      \"title\": \"provision name\",\n      \"plain_english\": \"what this clause means in plain language\",\n      \"implications\": \"what this means practically for the reader \u2014 consequences, restrictions, or rights created\",\n      \"severity\": \"neutral | noteworthy | concerning | critical\"\n    }\n  ],\n  \"obligations_on_reader\": [\"specific things the reader must do, must not do, or must provide\"],\n  \"rights_granted_to_reader\": [\"specific rights the reader gains under this agreement\"],\n  \"red_flags\": [\n    {\n      \"clause\": \"brief description of the clause or section\",\n      \"concern\": \"why this is unusual or potentially problematic\",\n      \"typical_alternative\": \"what this clause typically looks like in a balanced agreement\"\n    }\n  ],\n  \"missing_protections\": [\"things typically found in this document type that are absent here\"],\n  \"termination_summary\": \"plain English explanation of how the agreement ends and what happens when it does\",\n  \"liability_and_indemnification\": \"plain English summary of what each party is responsible for if things go wrong\",\n  \"key_dates_and_deadlines\": [\"specific dates, notice periods, or renewal windows to be aware of\"],\n  \"questions_for_lawyer\": [\"4-6 specific questions to raise with legal counsel before signing \u2014 based on actual content in this document\"],\n  \"overall_risk_assessment\": \"one of: low | moderate | elevated | high\",\n  \"risk_rationale\": \"1-2 sentences explaining the overall risk level\"\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "d9g3j6m8-0005",
+      "name": "Claude Legal Summarizer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        860,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet summary;\ntry { summary = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst input = $('Validate Input').first().json;\nsummary._meta = { documentType: input.documentType, documentTitle: input.documentTitle, audience: input.audience, partyRole: input.partyRole, replyEmail: input.replyEmail };\nreturn [{ json: summary }];"
+      },
+      "id": "d9g3j6m8-0006",
+      "name": "Parse Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const s = $input.first().json;\nconst m = s._meta;\nfunction esc(t) { return String(t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst riskConfig = {low:{color:'#16a34a',bg:'#f0fdf4',label:'Low Risk'}, moderate:{color:'#2563eb',bg:'#eff6ff',label:'Moderate Risk'}, elevated:{color:'#d97706',bg:'#fffbeb',label:'Elevated Risk'}, high:{color:'#dc2626',bg:'#fef2f2',label:'High Risk'}};\nconst rc = riskConfig[s.overall_risk_assessment] || riskConfig.moderate;\n\nconst sevColors = {neutral:'#6b7280', noteworthy:'#2563eb', concerning:'#d97706', critical:'#dc2626'};\nconst sevBgs = {neutral:'#f9fafb', noteworthy:'#eff6ff', concerning:'#fffbeb', critical:'#fef2f2'};\n\nconst keyProvisions = (s.key_provisions||[]).map(p => `\n  <div style=\"border-left:3px solid ${sevColors[p.severity]||'#6b7280'};padding:12px 16px;background:${sevBgs[p.severity]||'#f9fafb'};border-radius:0 6px 6px 0;margin-bottom:10px\">\n    <div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:5px\">\n      <span style=\"font-size:14px;font-weight:600\">${esc(p.title)}</span>\n      <span style=\"background:${sevColors[p.severity]||'#6b7280'}22;color:${sevColors[p.severity]||'#6b7280'};font-size:11px;font-weight:700;padding:2px 8px;border-radius:8px\">${esc(p.severity)}</span>\n    </div>\n    <div style=\"font-size:14px;color:#374151;line-height:1.65;margin-bottom:6px\">${esc(p.plain_english)}</div>\n    <div style=\"font-size:13px;color:#555;font-style:italic\">${esc(p.implications)}</div>\n  </div>`).join('');\n\nconst redFlags = (s.red_flags||[]).map(rf => `\n  <div style=\"border:1px solid #fecaca;border-radius:6px;margin-bottom:10px;overflow:hidden\">\n    <div style=\"background:#fef2f2;padding:8px 14px;font-size:13px;font-weight:600;color:#7f1d1d\">${esc(rf.clause)}</div>\n    <div style=\"padding:10px 14px\">\n      <div style=\"font-size:13px;color:#dc2626;margin-bottom:4px\"><strong>Concern:</strong> ${esc(rf.concern)}</div>\n      <div style=\"font-size:13px;color:#374151\"><strong>Typically:</strong> ${esc(rf.typical_alternative)}</div>\n    </div>\n  </div>`).join('');\n\nconst obligations = (s.obligations_on_reader||[]).map(o => `<li style=\"font-size:14px;margin-bottom:6px;line-height:1.5\">${esc(o)}</li>`).join('');\nconst rights = (s.rights_granted_to_reader||[]).map(r => `<li style=\"font-size:14px;margin-bottom:6px;line-height:1.5;color:#166534\">${esc(r)}</li>`).join('');\nconst missing = (s.missing_protections||[]).map(mp => `<div style=\"font-size:13px;color:#92400e;padding:4px 0\">\u25e6 ${esc(mp)}</div>`).join('');\nconst questions = (s.questions_for_lawyer||[]).map((q,i) => `<div style=\"font-size:14px;padding:7px 0;border-bottom:1px solid #eff6ff;color:#1e40af\">${i+1}. ${esc(q)}</div>`).join('');\nconst dates = (s.key_dates_and_deadlines||[]).map(d => `<div style=\"font-size:14px;padding:5px 0;border-bottom:1px solid #f3f4f6\">${esc(d)}</div>`).join('');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f5f5f0;font-family:Georgia,'Times New Roman',serif;color:#1a1a1a\">\n<div style=\"max-width:720px;margin:0 auto\">\n  <div style=\"background:#1e293b;color:#fff;padding:20px 28px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#64748b;margin-bottom:5px\">${esc(m.documentType.replace(/_/g,' '))}${m.partyRole ? ' \u00b7 ' + esc(m.partyRole) + ' perspective' : ''}</div>\n    <div style=\"font-size:18px;font-weight:700\">${esc(m.documentTitle||'Legal Document Summary')}</div>\n    <div style=\"font-size:12px;color:#94a3b8;margin-top:4px;font-family:sans-serif\">Not legal advice \u2014 for informational purposes only</div>\n  </div>\n  <div style=\"background:${rc.bg};padding:14px 28px;border:1px solid ${rc.color}44;border-top:none\">\n    <div style=\"display:flex;align-items:center;gap:12px\">\n      <span style=\"background:${rc.color};color:#fff;font-size:12px;font-weight:700;padding:4px 14px;border-radius:12px\">${rc.label}</span>\n      <div style=\"font-size:13px;color:#555\">${esc(s.risk_rationale)}</div>\n    </div>\n  </div>\n  <div style=\"background:#fff;padding:18px 28px;border:1px solid #e5e7eb;border-top:none\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:6px;font-family:sans-serif\">What this document does</div>\n    <p style=\"font-size:14px;line-height:1.75;color:#374151;margin:0 0 12px\">${esc(s.document_overview)}</p>\n    <p style=\"font-size:15px;line-height:1.8;color:#1a1a1a;font-style:italic;border-left:3px solid #e5e7eb;padding-left:14px;margin:0\">${esc(s.plain_english_summary)}</p>\n  </div>\n  ${keyProvisions ? `<div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:10px;font-family:sans-serif\">Key provisions</div>\n    ${keyProvisions}\n  </div>` : ''}\n  <div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\">\n    <div style=\"display:grid;grid-template-columns:1fr 1fr;gap:20px\">\n      ${obligations ? `<div><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#dc2626;margin-bottom:7px;font-family:sans-serif\">Your obligations</div><ul style=\"padding-left:18px;margin:0\">${obligations}</ul></div>` : ''}\n      ${rights ? `<div><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#16a34a;margin-bottom:7px;font-family:sans-serif\">Your rights</div><ul style=\"padding-left:18px;margin:0\">${rights}</ul></div>` : ''}\n    </div>\n  </div>\n  ${redFlags ? `<div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#b91c1c;margin-bottom:10px;font-family:sans-serif\">Red flags to discuss with your lawyer</div>\n    ${redFlags}\n  </div>` : ''}\n  ${missing ? `<div style=\"background:#fffbeb;padding:14px 28px;border:1px solid #fde68a\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#92400e;margin-bottom:7px;font-family:sans-serif\">Missing protections</div>\n    ${missing}\n  </div>` : ''}\n  ${s.liability_and_indemnification || s.termination_summary ? `<div style=\"background:#fff;padding:14px 28px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\">\n    ${s.termination_summary ? `<div style=\"margin-bottom:10px\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:5px;font-family:sans-serif\">Termination</div><div style=\"font-size:14px;color:#374151;line-height:1.65\">${esc(s.termination_summary)}</div></div>` : ''}\n    ${s.liability_and_indemnification ? `<div><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:5px;font-family:sans-serif\">Liability & indemnification</div><div style=\"font-size:14px;color:#374151;line-height:1.65\">${esc(s.liability_and_indemnification)}</div></div>` : ''}\n  </div>` : ''}\n  ${dates ? `<div style=\"background:#fff;padding:14px 28px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:7px;font-family:sans-serif\">Key dates & deadlines</div>\n    ${dates}\n  </div>` : ''}\n  ${questions ? `<div style=\"background:#eff6ff;padding:14px 28px;border:1px solid #bfdbfe\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#1d4ed8;margin-bottom:8px;font-family:sans-serif\">Ask your lawyer these questions</div>\n    ${questions}\n  </div>` : ''}\n  <div style=\"background:#1e293b;color:#475569;font-size:11px;padding:12px 28px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Legal Document Summarizer \u00b7 Not legal advice \u00b7 ${new Date().toLocaleDateString()}\n  </div>\n</div></body></html>`;\n\nreturn [{ json: { html, replyEmail: m.replyEmail, documentType: m.documentType, riskLevel: s.overall_risk_assessment, summary: s } }];"
+      },
+      "id": "d9g3j6m8-0007",
+      "name": "Build Summary Doc",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "ce",
+              "leftValue": "={{ $json.replyEmail }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "d9g3j6m8-0008",
+      "name": "Has Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.replyEmail}}",
+        "subject": "Legal summary: {{ $json.documentType.replace(/_/g,' ') }} \u2014 {{ $json.riskLevel }} risk",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "d9g3j6m8-0009",
+      "name": "Email Summary",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1740,
+        180
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'summarized', document_type: $json.documentType, risk_level: $json.riskLevel, emailed: $json.replyEmail ? true : false, summary: $json.summary } }}"
+      },
+      "id": "d9g3j6m8-0010",
+      "name": "Return Summary",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1960,
+        240
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook \u2013 Submit Document": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Claude Legal Summarizer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Legal Summarizer": {
+      "main": [
+        [
+          {
+            "node": "Parse Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Summary": {
+      "main": [
+        [
+          {
+            "node": "Build Summary Doc",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Summary Doc": {
+      "main": [
+        [
+          {
+            "node": "Has Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Email?": {
+      "main": [
+        [
+          {
+            "node": "Email Summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Summary": {
+      "main": [
+        [
+          {
+            "node": "Return Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    "legal",
+    "contracts",
+    "compliance",
+    "documents"
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-16T10:00:00.000Z",
+  "versionId": "v1.0.0"
+}

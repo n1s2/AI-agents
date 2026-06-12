@@ -1,0 +1,312 @@
+{
+  "name": "Crisis Communication Drafter",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "draft-crisis-comms",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "e1h4k7n9-0001",
+      "name": "Webhook \u2013 Submit Situation",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['organization_name', 'crisis_description', 'crisis_type', 'audiences'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nif (body.crisis_description.trim().length < 50) return [{ json: { valid: false, error: 'crisis_description too short' } }];\n\nconst crisisTypes = ['product_outage', 'data_breach', 'pr_scandal', 'safety_incident', 'executive_misconduct', 'financial_issue', 'legal_action', 'service_disruption', 'misinformation', 'natural_disaster', 'employee_incident', 'regulatory_action', 'other'];\nconst crisisType = crisisTypes.includes(body.crisis_type) ? body.crisis_type : 'other';\n\nconst audiences = Array.isArray(body.audiences)\n  ? body.audiences\n  : (body.audiences || '').split(',').map(a => a.trim()).filter(Boolean);\n\nconst urgencies = ['immediate', 'within_hours', 'within_day', 'proactive'];\nconst urgency = urgencies.includes(body.urgency) ? body.urgency : 'within_hours';\n\nreturn [{ json: {\n  valid: true,\n  orgName: body.organization_name.trim(),\n  orgType: body.org_type || 'company',\n  crisisType,\n  urgency,\n  crisisDescription: body.crisis_description.trim().slice(0, 2000),\n  knownFacts: (body.known_facts || '').slice(0, 800),\n  unknownFacts: (body.unknown_facts || '').slice(0, 400),\n  actionsTaken: (body.actions_taken || '').slice(0, 600),\n  audiences,\n  spokesPerson: body.spokesperson || '',\n  legalReview: body.legal_review_required !== false,\n  tone: body.tone || 'empathetic_professional',\n  avoidClaims: (body.avoid_claims || '').slice(0, 300),\n  replyEmail: body.reply_email || null,\n  requestedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "e1h4k7n9-0002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cv",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "e1h4k7n9-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "e1h4k7n9-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.45,
+          "maxTokens": 3500
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are a crisis communications specialist with experience across corporate PR, public sector, and consumer brands. You draft crisis communications that are honest, clear, empathetic, and appropriate for the situation.\n\nGood crisis communications:\n- Acknowledge the situation directly \u2014 don't minimize or deflect\n- Lead with what matters most to the affected audience\n- State what you know, what you don't know, and what you're doing\n- Avoid admitting legal liability while still being genuinely empathetic\n- Give a specific next step or commitment\n- Match the channel \u2014 a tweet is different from an email is different from a press statement\n- Don't over-promise what you can't deliver\n\nBad crisis communications:\n- \"We take this very seriously\" without substance\n- Passive voice to avoid accountability\n- Excessive legalese that signals you're protecting yourself, not addressing the problem\n- Premature apologies that admit liability before facts are established\n- Silence \u2014 even \"we're investigating and will update by [time]\" is better than nothing\n\nYou write for each audience specifically \u2014 customers, employees, media, and regulators each need different emphasis.\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Draft crisis communications.\n\nOrganization: {{ $json.orgName }} ({{ $json.orgType }})\nCrisis type: {{ $json.crisisType.replace(/_/g,' ') }}\nUrgency: {{ $json.urgency.replace(/_/g,' ') }}\nSpokesperson: {{ $json.spokesPerson || 'not specified' }}\nTone: {{ $json.tone.replace(/_/g,' ') }}\nLegal review required: {{ $json.legalReview }}\nAudiences to draft for: {{ $json.audiences.join(', ') }}\n\nCrisis description:\n{{ $json.crisisDescription }}\n\nKnown facts:\n{{ $json.knownFacts || 'not provided \u2014 draft conservatively' }}\n\nUnknown or unconfirmed facts:\n{{ $json.unknownFacts || 'none specified' }}\n\nActions already taken:\n{{ $json.actionsTaken || 'none yet' }}\n\nClaims/statements to avoid:\n{{ $json.avoidClaims || 'none specified' }}\n\nReturn this JSON:\n{\n  \"situation_assessment\": {\n    \"severity\": \"one of: minor | moderate | serious | severe | critical\",\n    \"reputation_risk\": \"one of: low | medium | high | extreme\",\n    \"key_stakeholder_concern\": \"the primary concern each affected group will have \u2014 one sentence per audience\"\n  },\n  \"communications_strategy\": \"2-3 sentences on the overall approach for this specific crisis \u2014 what to lead with, what to avoid, what the organization's position should be\",\n  \"statements\": {\n    \"holding_statement\": \"a short statement (2-4 sentences) to use immediately while facts are being gathered \u2014 neutral, acknowledges the situation, commits to update\",\n    \"customer_statement\": \"full statement for customers or end users \u2014 empathetic, specific to their impact, actionable\",\n    \"employee_statement\": \"full statement for internal employees \u2014 more direct, acknowledges their concerns, emphasizes what leadership is doing\",\n    \"media_statement\": \"press statement \u2014 factual, complete, quote from spokesperson if provided\",\n    \"social_media_post\": \"a single short post (under 280 chars) for Twitter/X \u2014 acknowledges the situation, points to more info\",\n    \"faq_responses\": [\n      {\n        \"question\": \"question your audiences will ask\",\n        \"answer\": \"honest, clear answer \u2014 or honest acknowledgment if you don't know yet\"\n      }\n    ]\n  },\n  \"what_not_to_say\": [\"specific phrases or claims to avoid in all communications \u2014 with brief reason why\"],\n  \"timeline_recommendations\": [\n    {\n      \"timeframe\": \"within 1 hour\",\n      \"action\": \"what to communicate and to whom\",\n      \"channel\": \"which channel\"\n    }\n  ],\n  \"legal_review_flags\": [\"specific statements or claims in these drafts that should be reviewed by legal counsel before publishing\"],\n  \"monitoring_recommendations\": [\"what to monitor for and how to know if communications are landing well or poorly\"]\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "e1h4k7n9-0005",
+      "name": "Claude Crisis Comms Writer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        860,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet comms;\ntry { comms = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst input = $('Validate Input').first().json;\ncomms._meta = { orgName: input.orgName, crisisType: input.crisisType, urgency: input.urgency, audiences: input.audiences, legalReview: input.legalReview, replyEmail: input.replyEmail };\nreturn [{ json: comms }];"
+      },
+      "id": "e1h4k7n9-0006",
+      "name": "Parse Comms",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const c = $input.first().json;\nconst m = c._meta;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst severityConfig = {minor:{color:'#6b7280',bg:'#f9fafb'},moderate:{color:'#2563eb',bg:'#eff6ff'},serious:{color:'#d97706',bg:'#fffbeb'},severe:{color:'#ea580c',bg:'#fff7ed'},critical:{color:'#dc2626',bg:'#fef2f2'}};\nconst sa = c.situation_assessment || {};\nconst sc = severityConfig[sa.severity] || severityConfig.moderate;\n\nconst urgencyLabel = m.urgency === 'immediate' ? '\ud83d\udea8 IMMEDIATE' : m.urgency === 'within_hours' ? '\u26a1 Within Hours' : m.urgency === 'within_day' ? '\ud83d\udccb Within 24 Hours' : '\ud83d\udce2 Proactive';\n\nconst stmts = c.statements || {};\nconst statementBlocks = [\n  {key: 'holding_statement', label: 'Holding Statement', icon: '\u23f3', color: '#6b7280', desc: 'Use immediately while facts are gathered'},\n  {key: 'customer_statement', label: 'Customer Statement', icon: '\ud83d\udc65', color: '#2563eb'},\n  {key: 'employee_statement', label: 'Employee Statement', icon: '\ud83c\udfe2', color: '#7c3aed'},\n  {key: 'media_statement', label: 'Press Statement', icon: '\ud83d\udcf0', color: '#0891b2'},\n  {key: 'social_media_post', label: 'Social Media Post', icon: '\ud83d\udcf1', color: '#16a34a'},\n].filter(s => stmts[s.key] && m.audiences.some(a => s.key.includes('holding') || s.key.includes(a.toLowerCase().replace(/\\s/g,'_')) || m.audiences.includes('all')))\n .map(s => `<div style=\"border-left:4px solid ${s.color};padding:14px 18px;background:#fafafa;border-radius:0 6px 6px 0;margin-bottom:14px\">\n    <div style=\"font-size:12px;font-weight:700;color:${s.color};margin-bottom:4px;text-transform:uppercase;letter-spacing:0.4px\">${s.icon} ${esc(s.label)}${s.desc ? ' <span style=\"font-weight:400;color:#9ca3af;text-transform:none\">\u2014 ' + esc(s.desc) + '</span>' : ''}</div>\n    <div style=\"font-size:14px;line-height:1.8;white-space:pre-wrap;color:#1a1a1a\">${esc(stmts[s.key])}</div>\n  </div>`).join('');\n\nconst allStatements = [\n  {key: 'holding_statement', label: '\u23f3 Holding Statement', color: '#6b7280'},\n  {key: 'customer_statement', label: '\ud83d\udc65 Customer Statement', color: '#2563eb'},\n  {key: 'employee_statement', label: '\ud83c\udfe2 Employee Statement', color: '#7c3aed'},\n  {key: 'media_statement', label: '\ud83d\udcf0 Press Statement', color: '#0891b2'},\n  {key: 'social_media_post', label: '\ud83d\udcf1 Social Media', color: '#16a34a'},\n].filter(s => stmts[s.key])\n .map(s => `<div style=\"border-left:4px solid ${s.color};padding:14px 18px;background:#fafafa;border-radius:0 6px 6px 0;margin-bottom:14px\">\n    <div style=\"font-size:12px;font-weight:700;color:${s.color};margin-bottom:6px;text-transform:uppercase\">${esc(s.label)}</div>\n    <div style=\"font-size:14px;line-height:1.8;white-space:pre-wrap;color:#1a1a1a\">${esc(stmts[s.key])}</div>\n  </div>`).join('');\n\nconst faqBlocks = (stmts.faq_responses||[]).map(faq => `<div style=\"margin-bottom:12px\"><div style=\"font-size:14px;font-weight:600;color:#1a1a1a;margin-bottom:4px\">Q: ${esc(faq.question)}</div><div style=\"font-size:14px;color:#374151;line-height:1.65;background:#f9fafb;padding:8px 12px;border-radius:4px\">A: ${esc(faq.answer)}</div></div>`).join('');\n\nconst timeline = (c.timeline_recommendations||[]).map(t => `<div style=\"display:flex;gap:12px;padding:9px 0;border-bottom:1px solid #f3f4f6;align-items:flex-start\"><span style=\"font-size:12px;font-weight:700;color:#dc2626;white-space:nowrap;min-width:100px\">${esc(t.timeframe)}</span><div><div style=\"font-size:14px;color:#374151\">${esc(t.action)}</div><div style=\"font-size:12px;color:#9ca3af\">${esc(t.channel||'')}</div></div></div>`).join('');\n\nconst avoidList = (c.what_not_to_say||[]).map(w => `<div style=\"font-size:13px;color:#7f1d1d;padding:4px 0\">\u2717 ${esc(w)}</div>`).join('');\nconst legalFlags = (c.legal_review_flags||[]).map(f => `<li style=\"font-size:13px;color:#7f1d1d;margin-bottom:5px\">${esc(f)}</li>`).join('');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f5f5f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111\">\n<div style=\"max-width:720px;margin:0 auto\">\n  <div style=\"background:#1a1a1a;color:#fff;padding:18px 28px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#6b7280;margin-bottom:4px\">Crisis Communications \u00b7 ${urgencyLabel}</div>\n    <div style=\"font-size:19px;font-weight:700\">${esc(m.orgName)} \u2014 ${esc(m.crisisType.replace(/_/g,' '))}</div>\n  </div>\n  <div style=\"background:${sc.bg};padding:12px 28px;border:1px solid ${sc.color}44;border-top:none;display:flex;gap:12px;align-items:center;flex-wrap:wrap\">\n    <span style=\"background:${sc.color};color:#fff;font-size:11px;font-weight:700;padding:3px 12px;border-radius:10px\">SEVERITY: ${esc((sa.severity||'?').toUpperCase())}</span>\n    <span style=\"background:${sa.reputation_risk==='extreme'?'#dc2626':sa.reputation_risk==='high'?'#d97706':'#6b7280'};color:#fff;font-size:11px;font-weight:700;padding:3px 12px;border-radius:10px\">REPUTATION RISK: ${esc((sa.reputation_risk||'?').toUpperCase())}</span>\n    ${m.legalReview ? '<span style=\"background:#7c3aed;color:#fff;font-size:11px;font-weight:700;padding:3px 12px;border-radius:10px\">LEGAL REVIEW REQUIRED</span>' : ''}\n  </div>\n  <div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:none\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:6px\">Communications strategy</div>\n    <p style=\"font-size:14px;line-height:1.75;color:#374151;margin:0\">${esc(c.communications_strategy)}</p>\n  </div>\n  <div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:12px\">Draft statements</div>\n    ${allStatements}\n  </div>\n  ${faqBlocks ? `<div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:10px\">FAQ responses</div>\n    ${faqBlocks}\n  </div>` : ''}\n  ${timeline ? `<div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:8px\">Response timeline</div>\n    ${timeline}\n  </div>` : ''}\n  ${avoidList ? `<div style=\"background:#fef2f2;padding:14px 28px;border:1px solid #fecaca\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#b91c1c;margin-bottom:7px\">Do NOT say</div>\n    ${avoidList}\n  </div>` : ''}\n  ${legalFlags ? `<div style=\"background:#f5f3ff;padding:14px 28px;border:1px solid #ddd6fe\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#7c3aed;margin-bottom:7px\">Flag for legal review before publishing</div>\n    <ul style=\"padding-left:18px;margin:0\">${legalFlags}</ul>\n  </div>` : ''}\n  <div style=\"background:#1a1a1a;color:#4b5563;font-size:11px;padding:12px 28px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Crisis Comms Drafter \u00b7 ${esc(m.orgName)} \u00b7 ${new Date().toLocaleDateString()}\n  </div>\n</div></body></html>`;\n\nreturn [{ json: { html, replyEmail: m.replyEmail, orgName: m.orgName, crisisType: m.crisisType, severity: sa.severity, comms: c } }];"
+      },
+      "id": "e1h4k7n9-0007",
+      "name": "Build Comms Doc",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "ce",
+              "leftValue": "={{ $json.replyEmail }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "e1h4k7n9-0008",
+      "name": "Has Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.replyEmail}}",
+        "subject": "\ud83d\udea8 Crisis comms: {{ $json.orgName }} \u2014 {{ $json.crisisType.replace(/_/g,' ') }} \u00b7 {{ $json.severity }} severity",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "e1h4k7n9-0009",
+      "name": "Email Comms",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1740,
+        180
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'drafted', org: $json.orgName, crisis_type: $json.crisisType, severity: $json.severity, emailed: $json.replyEmail ? true : false, comms: $json.comms } }}"
+      },
+      "id": "e1h4k7n9-0010",
+      "name": "Return Comms",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1960,
+        240
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook \u2013 Submit Situation": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Claude Crisis Comms Writer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Crisis Comms Writer": {
+      "main": [
+        [
+          {
+            "node": "Parse Comms",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Comms": {
+      "main": [
+        [
+          {
+            "node": "Build Comms Doc",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Comms Doc": {
+      "main": [
+        [
+          {
+            "node": "Has Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Email?": {
+      "main": [
+        [
+          {
+            "node": "Email Comms",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Comms",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Comms": {
+      "main": [
+        [
+          {
+            "node": "Return Comms",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    "pr",
+    "crisis",
+    "communications",
+    "reputation"
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-16T11:00:00.000Z",
+  "versionId": "v1.0.0"
+}

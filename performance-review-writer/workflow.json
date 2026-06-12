@@ -1,0 +1,312 @@
+{
+  "name": "Performance Review Writer Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "write-review",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "c8f2i5l7-0001",
+      "name": "Webhook \u2013 Generate Review",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['employee_name', 'review_period', 'role', 'performance_notes'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nif (body.performance_notes.trim().length < 50) return [{ json: { valid: false, error: 'performance_notes too short \u2014 need at least 50 chars' } }];\nconst ratings = ['exceptional', 'exceeds_expectations', 'meets_expectations', 'below_expectations', 'unsatisfactory'];\nconst overallRating = ratings.includes(body.overall_rating) ? body.overall_rating : null;\nconst reviewTypes = ['annual', 'mid_year', 'quarterly', 'probation', '90_day', 'pip'];\nconst reviewType = reviewTypes.includes(body.review_type) ? body.review_type : 'annual';\nreturn [{ json: {\n  valid: true,\n  employeeName: body.employee_name.trim(),\n  employeeTitle: body.employee_title || body.role,\n  role: body.role.trim(),\n  department: body.department || '',\n  reviewPeriod: body.review_period.trim(),\n  reviewType,\n  managerName: body.manager_name || '',\n  performanceNotes: body.performance_notes.trim().slice(0, 4000),\n  accomplishments: Array.isArray(body.accomplishments) ? body.accomplishments : (body.accomplishments || '').split('\n').map(a=>a.trim()).filter(Boolean),\n  areasForImprovement: Array.isArray(body.areas_for_improvement) ? body.areas_for_improvement : (body.areas_for_improvement || '').split('\n').map(a=>a.trim()).filter(Boolean),\n  goals: Array.isArray(body.goals_for_next_period) ? body.goals_for_next_period : (body.goals_for_next_period || '').split('\n').map(g=>g.trim()).filter(Boolean),\n  overallRating,\n  competencies: body.competencies || [],\n  tone: body.tone || 'constructive',\n  wordTarget: parseInt(body.word_target) || 400,\n  includeRatingsPerSection: body.include_section_ratings === true,\n  replyEmail: body.reply_email || null,\n  requestedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "c8f2i5l7-0002",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cv",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "c8f2i5l7-0003",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "c8f2i5l7-0004",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.5,
+          "maxTokens": 2500
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You write performance reviews for managers. You turn raw notes and bullet points into cohesive, professional review narratives that are specific, fair, and actionable.\n\nGood performance reviews:\n- Use specific examples, not vague generalities (\"delivered the API migration on time despite a 3-week scope change\" not \"handled challenges well\")\n- Balance recognition with constructive feedback \u2014 both should be substantive\n- Connect performance to impact on the team and business\n- Frame development areas as opportunities, not deficiencies \u2014 but don't sugarcoat real issues\n- Set goals that are specific and achievable, not wish lists\n- Match tone to the rating: a high performer's review reads differently from someone on a PIP\n\nYou calibrate to the review type: an annual review is comprehensive; a 90-day review focuses on ramp; a PIP has a specific structure around clarity of expectations and support.\n\nAlways respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Write a performance review.\n\nEmployee: {{ $json.employeeName }}\nTitle: {{ $json.employeeTitle }}\nRole: {{ $json.role }}\nDepartment: {{ $json.department || 'not specified' }}\nReview period: {{ $json.reviewPeriod }}\nReview type: {{ $json.reviewType.replace(/_/g,' ') }}\nManager: {{ $json.managerName || 'not specified' }}\nOverall rating: {{ $json.overallRating ? $json.overallRating.replace(/_/g,' ') : 'not provided' }}\nTarget length: ~{{ $json.wordTarget }} words\nTone: {{ $json.tone }}\nInclude section ratings: {{ $json.includeRatingsPerSection }}\nCompetencies to cover: {{ $json.competencies.join(', ') || 'standard \u2014 infer from role' }}\n\nManager's raw notes:\n{{ $json.performanceNotes }}\n\nKey accomplishments listed:\n{{ $json.accomplishments.map((a,i) => `${i+1}. ${a}`).join('\\n') || 'see notes above' }}\n\nAreas for development:\n{{ $json.areasForImprovement.map((a,i) => `${i+1}. ${a}`).join('\\n') || 'see notes above' }}\n\nGoals for next period:\n{{ $json.goals.map((g,i) => `${i+1}. ${g}`).join('\\n') || 'see notes above' }}\n\nReturn this JSON:\n{\n  \"overall_summary\": \"2-3 sentence opening that sets the overall tone and captures the essence of the review period\",\n  \"sections\": [\n    {\n      \"title\": \"section name e.g. Performance & Accomplishments\",\n      \"rating\": \"exceptional | exceeds | meets | below | unsatisfactory \u2014 null if not applicable\",\n      \"content\": \"section narrative \u2014 specific, evidence-based, appropriate length for the section\"\n    }\n  ],\n  \"strengths_highlighted\": [\"2-4 specific strengths called out in the review\"],\n  \"development_areas\": [\"2-3 development areas with constructive framing\"],\n  \"goals_next_period\": [\n    {\n      \"goal\": \"specific, measurable goal\",\n      \"rationale\": \"why this goal matters for this employee's growth\"\n    }\n  ],\n  \"closing_statement\": \"1-2 sentences wrapping up \u2014 forward-looking, appropriate to the rating\",\n  \"full_review_text\": \"the complete review as a single formatted string ready to paste into an HR system \u2014 includes all sections with appropriate headers\",\n  \"manager_notes\": \"1-2 internal notes for the manager before delivering this review \u2014 e.g. how to handle a sensitive topic, what to emphasize in the conversation\"\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "c8f2i5l7-0005",
+      "name": "Claude Review Writer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        860,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet review;\ntry { review = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst input = $('Validate Input').first().json;\nreview._meta = { employeeName: input.employeeName, role: input.role, reviewPeriod: input.reviewPeriod, reviewType: input.reviewType, overallRating: input.overallRating, managerName: input.managerName, replyEmail: input.replyEmail };\nreturn [{ json: review }];"
+      },
+      "id": "c8f2i5l7-0006",
+      "name": "Parse Review",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nconst m = r._meta;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst ratingColors = { exceptional:'#16a34a', exceeds_expectations:'#2563eb', meets_expectations:'#6b7280', below_expectations:'#d97706', unsatisfactory:'#dc2626' };\nconst ratingLabels = { exceptional:'Exceptional', exceeds_expectations:'Exceeds Expectations', meets_expectations:'Meets Expectations', below_expectations:'Below Expectations', unsatisfactory:'Unsatisfactory' };\nconst rc = ratingColors[m.overallRating] || '#6b7280';\nconst rl = ratingLabels[m.overallRating] || m.overallRating || 'Not Rated';\n\nconst sectionBlocks = (r.sections||[]).map(s => {\n  const sRatingLabel = s.rating ? (ratingLabels[s.rating.replace(/ /g,'_').toLowerCase()] || s.rating) : null;\n  const sColor = s.rating ? (ratingColors[s.rating.replace(/ /g,'_').toLowerCase()] || '#6b7280') : null;\n  return `<div style=\"margin-bottom:22px\">\n    <div style=\"display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #e5e7eb;padding-bottom:6px;margin-bottom:10px\">\n      <div style=\"font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:#374151\">${esc(s.title)}</div>\n      ${sRatingLabel ? `<span style=\"background:${sColor}22;color:${sColor};font-size:11px;font-weight:700;padding:2px 10px;border-radius:10px\">${esc(sRatingLabel)}</span>` : ''}\n    </div>\n    <div style=\"font-size:14px;line-height:1.8;color:#374151;white-space:pre-line\">${esc(s.content)}</div>\n  </div>`;\n}).join('');\n\nconst goals = (r.goals_next_period||[]).map(g => `<div style=\"padding:9px 0;border-bottom:1px solid #f0f9ff\">\n  <div style=\"font-size:14px;font-weight:600;color:#1e40af\">${esc(g.goal)}</div>\n  <div style=\"font-size:13px;color:#6b7280;margin-top:3px\">${esc(g.rationale)}</div>\n</div>`).join('');\n\nconst strengths = (r.strengths_highlighted||[]).map(s => `<div style=\"font-size:14px;padding:5px 0;border-bottom:1px solid #f0fdf4;color:#166534\">\u2713 ${esc(s)}</div>`).join('');\nconst devAreas = (r.development_areas||[]).map(d => `<div style=\"font-size:14px;padding:5px 0;border-bottom:1px solid #fff7ed;color:#78350f\">\u2192 ${esc(d)}</div>`).join('');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f8f8f6;font-family:Georgia,'Times New Roman',serif;color:#1a1a1a\">\n<div style=\"max-width:720px;margin:0 auto\">\n  <div style=\"background:#1e293b;color:#fff;padding:22px 32px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#64748b;margin-bottom:5px\">${esc(m.reviewType.replace(/_/g,' '))} Review \u00b7 ${esc(m.reviewPeriod)}</div>\n    <div style=\"font-size:20px;font-weight:700\">${esc(m.employeeName)}</div>\n    <div style=\"font-size:14px;color:#94a3b8;margin-top:4px\">${esc(m.role)}${m.managerName ? ' \u00b7 Manager: ' + esc(m.managerName) : ''}</div>\n  </div>\n  <div style=\"background:#fff;padding:14px 32px;border:1px solid #e5e7eb;border-top:none;display:flex;align-items:center;gap:14px\">\n    <span style=\"background:${rc};color:#fff;font-size:13px;font-weight:700;padding:5px 16px;border-radius:14px\">${esc(rl)}</span>\n    <p style=\"font-size:14px;line-height:1.7;color:#374151;margin:0\">${esc(r.overall_summary)}</p>\n  </div>\n  <div style=\"background:#fff;padding:22px 32px;border:1px solid #e5e7eb;border-top:3px solid #f3f3f0;font-family:Georgia,serif\">\n    ${sectionBlocks}\n    ${r.closing_statement ? `<p style=\"font-size:14px;line-height:1.8;color:#374151;font-style:italic;border-top:1px solid #e5e7eb;padding-top:16px;margin-top:8px\">${esc(r.closing_statement)}</p>` : ''}\n  </div>\n  ${goals ? `<div style=\"background:#eff6ff;padding:16px 32px;border:1px solid #bfdbfe\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#1d4ed8;margin-bottom:8px\">Goals for next period</div>\n    ${goals}\n  </div>` : ''}\n  <div style=\"background:#fff;padding:14px 32px;border:1px solid #e5e7eb;border-top:3px solid #f3f3f0\">\n    <div style=\"display:grid;grid-template-columns:1fr 1fr;gap:20px\">\n      ${strengths ? `<div><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#15803d;margin-bottom:7px\">Key strengths</div>${strengths}</div>` : ''}\n      ${devAreas ? `<div><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#c2410c;margin-bottom:7px\">Development areas</div>${devAreas}</div>` : ''}\n    </div>\n  </div>\n  ${r.manager_notes ? `<div style=\"background:#fffbeb;padding:14px 32px;border:1px solid #fde68a\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#92400e;margin-bottom:5px\">Manager notes (internal \u2014 don't share)</div>\n    <div style=\"font-size:13px;color:#78350f;line-height:1.65\">${esc(r.manager_notes)}</div>\n  </div>` : ''}\n  <div style=\"background:#1e293b;color:#475569;font-size:11px;padding:12px 32px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">\n    Performance Review \u00b7 ${esc(m.employeeName)} \u00b7 ${esc(m.reviewPeriod)}\n  </div>\n</div></body></html>`;\n\nreturn [{ json: { html, replyEmail: m.replyEmail, employeeName: m.employeeName, reviewPeriod: m.reviewPeriod, overallRating: m.overallRating, review: r } }];"
+      },
+      "id": "c8f2i5l7-0007",
+      "name": "Build Review Doc",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "ce",
+              "leftValue": "={{ $json.replyEmail }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "c8f2i5l7-0008",
+      "name": "Has Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.replyEmail}}",
+        "subject": "Review draft: {{ $json.employeeName }} \u00b7 {{ $json.reviewPeriod }}{{ $json.overallRating ? ' \u00b7 ' + $json.overallRating.replace(/_/g,' ') : '' }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "c8f2i5l7-0009",
+      "name": "Email Review",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1740,
+        180
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'written', employee: $json.employeeName, review_period: $json.reviewPeriod, overall_rating: $json.overallRating, emailed: $json.replyEmail ? true : false, review: $json.review } }}"
+      },
+      "id": "c8f2i5l7-0010",
+      "name": "Return Review",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1960,
+        240
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook \u2013 Generate Review": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Claude Review Writer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Review Writer": {
+      "main": [
+        [
+          {
+            "node": "Parse Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Review": {
+      "main": [
+        [
+          {
+            "node": "Build Review Doc",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Review Doc": {
+      "main": [
+        [
+          {
+            "node": "Has Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Email?": {
+      "main": [
+        [
+          {
+            "node": "Email Review",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Review": {
+      "main": [
+        [
+          {
+            "node": "Return Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    "hr",
+    "performance",
+    "management",
+    "reviews"
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-16T09:00:00.000Z",
+  "versionId": "v1.0.0"
+}
