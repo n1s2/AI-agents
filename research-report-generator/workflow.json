@@ -1,0 +1,120 @@
+{
+  "name": "Research Report Generator Agent",
+  "nodes": [
+    {
+      "parameters": {"httpMethod": "POST", "path": "generate-report", "responseMode": "responseNode", "options": {}},
+      "id": "f2i5l8o1-0001", "name": "Webhook",
+      "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [200, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['topic', 'report_type'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nconst reportTypes = ['market_analysis','competitive_landscape','industry_overview','technology_assessment','investment_thesis','due_diligence','trend_report','feasibility_study','background_brief'];\nconst reportType = reportTypes.includes(body.report_type) ? body.report_type : 'background_brief';\nconst audiences = ['executive','investor','technical','general_business','board'];\nconst audience = audiences.includes(body.audience) ? body.audience : 'general_business';\nreturn [{ json: { valid: true, topic: body.topic.trim(), reportType, audience, specificQuestions: Array.isArray(body.specific_questions)?body.specific_questions.slice(0,8):(body.specific_questions||'').split('\\n').map(q=>q.trim()).filter(Boolean).slice(0,8), scope: (body.scope||'').slice(0,400), geographicFocus: body.geographic_focus||'global', timeframe: body.timeframe||'current', depthLevel: body.depth_level||'comprehensive', excludeTopics: (body.exclude_topics||'').slice(0,200), replyEmail: body.reply_email||null, requestedAt: new Date().toISOString() } }];"
+      },
+      "id": "f2i5l8o1-0002", "name": "Validate Input",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [420, 320]
+    },
+    {
+      "parameters": {"conditions": {"conditions": [{"id": "cv", "leftValue": "={{ $json.valid }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true"}}], "combinator": "and"}},
+      "id": "f2i5l8o1-0003", "name": "Valid?",
+      "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [640, 320]
+    },
+    {
+      "parameters": {"respondWith": "json", "responseBody": "={{ { error: $json.error, status: 400 } }}"},
+      "id": "f2i5l8o1-0004", "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1, "position": [860, 480]
+    },
+    {
+      "parameters": {
+        "method": "GET", "url": "https://api.tavily.com/search",
+        "sendBody": true, "specifyBody": "json",
+        "bodyParameters": {"parameters": [
+          {"name": "api_key", "value": "={{$env.TAVILY_API_KEY}}"},
+          {"name": "query", "value": "={{ $json.topic }} {{ $json.reportType.replace(/_/g,' ') }} {{ $json.geographicFocus !== 'global' ? $json.geographicFocus : '' }} {{ $json.timeframe !== 'current' ? $json.timeframe : new Date().getFullYear() }}"},
+          {"name": "search_depth", "value": "advanced"},
+          {"name": "max_results", "value": 8}
+        ]}
+      },
+      "id": "f2i5l8o1-0005", "name": "Primary Research",
+      "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.1, "position": [860, 180]
+    },
+    {
+      "parameters": {
+        "method": "GET", "url": "https://api.tavily.com/search",
+        "sendBody": true, "specifyBody": "json",
+        "bodyParameters": {"parameters": [
+          {"name": "api_key", "value": "={{$env.TAVILY_API_KEY}}"},
+          {"name": "query", "value": "={{ $json.topic }} statistics data market size trends {{ new Date().getFullYear() }}"},
+          {"name": "search_depth", "value": "basic"},
+          {"name": "max_results", "value": 5}
+        ]}
+      },
+      "id": "f2i5l8o1-0006", "name": "Data Research",
+      "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.1, "position": [860, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "const primary = $('Primary Research').first().json?.results || [];\nconst data = $('Data Research').first().json?.results || [];\nconst input = $('Validate Input').first().json;\nconst primaryContext = primary.map(r => `Title: ${r.title}\\nSource: ${r.url}\\nContent: ${(r.content||r.snippet||'').slice(0,500)}`).join('\\n\\n---\\n\\n');\nconst dataContext = data.map(r => `${r.title}: ${(r.content||r.snippet||'').slice(0,400)}`).join('\\n\\n');\nconst sources = [...primary, ...data].map(r => ({ title: r.title, url: r.url }));\nreturn [{ json: { input, primaryContext, dataContext, sources } }];"
+      },
+      "id": "f2i5l8o1-0007", "name": "Merge Research",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1060, 260]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {"temperature": 0.45, "maxTokens": 4000},
+        "messages": {"values": [
+          {"content": "You write research reports that synthesize information from multiple sources into coherent, structured analysis. Lead with the most important findings. Distinguish known/likely/uncertain. Use specific data, not general statements. Draw clear conclusions and implications. Cite sources for key claims. Calibrate depth and tone to audience and report type. Always respond in valid JSON only.", "role": "system"},
+          {"content": "Write a research report.\n\nTopic: {{ $json.input.topic }}\nReport type: {{ $json.input.reportType.replace(/_/g,' ') }}\nAudience: {{ $json.input.audience.replace(/_/g,' ') }}\nGeographic focus: {{ $json.input.geographicFocus }}\nTimeframe: {{ $json.input.timeframe }}\nScope: {{ $json.input.scope || 'not specified' }}\nSpecific questions: {{ $json.input.specificQuestions.join('; ') || 'none specified' }}\n\nPrimary research:\n{{ $json.primaryContext }}\n\nData research:\n{{ $json.dataContext }}\n\nReturn this JSON:\n{\n  \"report_title\": \"clear, specific title\",\n  \"executive_summary\": \"3-5 sentences\",\n  \"key_findings\": [{\"finding\":\"...\",\"evidence\":\"...\",\"implication\":\"...\"}],\n  \"sections\": [{\"title\":\"...\",\"content\":\"...\"}],\n  \"data_highlights\": [{\"metric\":\"...\",\"context\":\"...\",\"source_hint\":\"...\"}],\n  \"opportunities\": [\"...\"],\n  \"risks_and_challenges\": [\"...\"],\n  \"conclusions\": \"2-3 sentences\",\n  \"recommended_next_steps\": [\"...\"],\n  \"knowledge_gaps\": [\"...\"]\n}", "role": "user"}
+        ]}
+      },
+      "id": "f2i5l8o1-0008", "name": "Claude Report Writer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic", "typeVersion": 1.3, "position": [1280, 260]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet report;\ntry { report = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst input = $('Validate Input').first().json;\nconst merged = $('Merge Research').first().json;\nreport.sources_used = (merged.sources||[]).slice(0,12);\nreport._meta = { topic: input.topic, reportType: input.reportType, audience: input.audience, replyEmail: input.replyEmail, generatedAt: new Date().toISOString() };\nreturn [{ json: report }];"
+      },
+      "id": "f2i5l8o1-0009", "name": "Parse Report",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1500, 260]
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nconst m = r._meta;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nconst sectionBlocks = (r.sections||[]).map(s => `<div style=\"margin-bottom:24px\"><h2 style=\"font-size:16px;font-weight:700;color:#1e293b;border-bottom:2px solid #e5e7eb;padding-bottom:6px;margin-bottom:12px\">${esc(s.title)}</h2><div style=\"font-size:14px;line-height:1.85;color:#374151;white-space:pre-line\">${esc(s.content)}</div></div>`).join('');\nconst keyFindings = (r.key_findings||[]).map((f,i) => `<div style=\"border-left:3px solid #2563eb;padding:12px 16px;background:#f8faff;border-radius:0 6px 6px 0;margin-bottom:10px\"><div style=\"font-size:14px;font-weight:600;color:#1e3a8a;margin-bottom:4px\">${i+1}. ${esc(f.finding)}</div><div style=\"font-size:13px;color:#555;margin-bottom:3px\">${esc(f.evidence)}</div><div style=\"font-size:13px;color:#16a34a;font-style:italic\">→ ${esc(f.implication)}</div></div>`).join('');\nconst dataHighlights = (r.data_highlights||[]).map(d => `<div style=\"background:#fff;border:1px solid #e5e7eb;border-radius:6px;padding:12px 16px;margin-bottom:8px\"><div style=\"font-size:16px;font-weight:700;color:#1e293b\">${esc(d.metric)}</div><div style=\"font-size:13px;color:#6b7280;margin-top:3px\">${esc(d.context)}</div><div style=\"font-size:11px;color:#9ca3af;margin-top:2px\">${esc(d.source_hint||'')}</div></div>`).join('');\nconst opportunities = (r.opportunities||[]).map(o => `<div style=\"font-size:14px;padding:6px 0;border-bottom:1px solid #f0fdf4;color:#166534\">↑ ${esc(o)}</div>`).join('');\nconst risks = (r.risks_and_challenges||[]).map(risk => `<div style=\"font-size:14px;padding:6px 0;border-bottom:1px solid #fff7ed;color:#c2410c\">↓ ${esc(risk)}</div>`).join('');\nconst nextSteps = (r.recommended_next_steps||[]).map((s,i) => `<div style=\"font-size:14px;padding:7px 0;border-bottom:1px solid #f0f9ff;color:#1e40af\">${i+1}. ${esc(s)}</div>`).join('');\nconst gaps = (r.knowledge_gaps||[]).map(g => `<div style=\"font-size:13px;color:#6b7280;padding:4px 0\">◦ ${esc(g)}</div>`).join('');\nconst sources = (r.sources_used||[]).slice(0,12).map((s,i) => `<div style=\"font-size:12px;padding:5px 0;border-bottom:1px solid #f3f4f6\"><span style=\"color:#9ca3af;margin-right:6px\">[${i+1}]</span><a href=\"${esc(s.url)}\" style=\"color:#2563eb;text-decoration:none\">${esc(s.title)}</a></div>`).join('');\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>${esc(r.report_title)}</title></head><body style=\"margin:0;padding:16px;background:#f5f5f0;font-family:Georgia,'Times New Roman',serif;color:#1a1a1a\"><div style=\"max-width:760px;margin:0 auto\"><div style=\"background:#1e293b;color:#fff;padding:24px 32px;border-radius:10px 10px 0 0\"><div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#64748b;margin-bottom:6px\">${esc(m.reportType.replace(/_/g,' '))} · ${esc(m.audience.replace(/_/g,' '))} audience</div><div style=\"font-size:22px;font-weight:700;line-height:1.3\">${esc(r.report_title)}</div><div style=\"font-size:12px;color:#94a3b8;margin-top:6px;font-family:sans-serif\">Generated ${esc(m.generatedAt.split('T')[0])}</div></div><div style=\"background:#f0f7ff;padding:20px 32px;border:1px solid #bfdbfe;border-top:none\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#1d4ed8;margin-bottom:8px;font-family:sans-serif\">Executive Summary</div><p style=\"font-size:15px;line-height:1.85;color:#1e3a8a;margin:0\">${esc(r.executive_summary)}</p></div>${keyFindings?`<div style=\"background:#fff;padding:20px 32px;border:1px solid #e5e7eb;border-top:none\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:12px;font-family:sans-serif\">Key Findings</div>${keyFindings}</div>`:''}${dataHighlights?`<div style=\"background:#f8f8f6;padding:18px 32px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:10px;font-family:sans-serif\">Data Highlights</div><div style=\"display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px\">${dataHighlights}</div></div>`:''}<div style=\"background:#fff;padding:24px 32px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\">${sectionBlocks}</div>${opportunities||risks?`<div style=\"background:#fff;padding:18px 32px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\"><div style=\"display:grid;grid-template-columns:1fr 1fr;gap:20px\">${opportunities?`<div><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#16a34a;margin-bottom:8px;font-family:sans-serif\">Opportunities</div>${opportunities}</div>`:''}${risks?`<div><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#c2410c;margin-bottom:8px;font-family:sans-serif\">Risks & Challenges</div>${risks}</div>`:''}</div></div>`:''}<div style=\"background:#fff;padding:18px 32px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:6px;font-family:sans-serif\">Conclusions</div><p style=\"font-size:14px;line-height:1.8;color:#374151;margin:0;font-style:italic\">${esc(r.conclusions)}</p></div>${nextSteps?`<div style=\"background:#eff6ff;padding:16px 32px;border:1px solid #bfdbfe\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#1d4ed8;margin-bottom:8px;font-family:sans-serif\">Recommended Next Steps</div>${nextSteps}</div>`:''}${gaps?`<div style=\"background:#f9fafb;padding:14px 32px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:6px;font-family:sans-serif\">Knowledge Gaps & Uncertainties</div>${gaps}</div>`:''}${sources?`<div style=\"background:#fff;padding:14px 32px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:8px;font-family:sans-serif\">Sources</div>${sources}</div>`:''}<div style=\"background:#1e293b;color:#475569;font-size:11px;padding:12px 32px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">Research Report · ${esc(m.topic)} · ${esc(m.generatedAt.split('T')[0])}</div></div></body></html>`;\nreturn [{ json: { html, replyEmail: m.replyEmail, reportTitle: r.report_title, topic: m.topic, report: r } }];"
+      },
+      "id": "f2i5l8o1-0010", "name": "Build Report Doc",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1720, 260]
+    },
+    {
+      "parameters": {"conditions": {"conditions": [{"id": "ce", "leftValue": "={{ $json.replyEmail }}", "rightValue": "", "operator": {"type": "string", "operation": "notEmpty"}}], "combinator": "and"}},
+      "id": "f2i5l8o1-0011", "name": "Has Email?",
+      "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [1940, 260]
+    },
+    {
+      "parameters": {"fromEmail": "={{$env.FROM_EMAIL}}", "toEmail": "={{$json.replyEmail}}", "subject": "Research report: {{ $json.reportTitle }}", "emailType": "html", "message": "={{$json.html}}"},
+      "id": "f2i5l8o1-0012", "name": "Email Report",
+      "type": "n8n-nodes-base.emailSend", "typeVersion": 2.1, "position": [2160, 200],
+      "credentials": {"smtp": {"id": "smtp-creds-01", "name": "SMTP Account"}}
+    },
+    {
+      "parameters": {"respondWith": "json", "responseBody": "={{ { status: 'generated', title: $json.reportTitle, topic: $json.topic, emailed: $json.replyEmail ? true : false, report: $json.report } }}"},
+      "id": "f2i5l8o1-0013", "name": "Return Report",
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1, "position": [2380, 260]
+    }
+  ],
+  "connections": {
+    "Webhook": {"main": [[{"node": "Validate Input", "type": "main", "index": 0}]]},
+    "Validate Input": {"main": [[{"node": "Valid?", "type": "main", "index": 0}]]},
+    "Valid?": {"main": [[{"node": "Primary Research", "type": "main", "index": 0}, {"node": "Data Research", "type": "main", "index": 0}], [{"node": "Return Error", "type": "main", "index": 0}]]},
+    "Primary Research": {"main": [[{"node": "Merge Research", "type": "main", "index": 0}]]},
+    "Data Research": {"main": [[{"node": "Merge Research", "type": "main", "index": 0}]]},
+    "Merge Research": {"main": [[{"node": "Claude Report Writer", "type": "main", "index": 0}]]},
+    "Claude Report Writer": {"main": [[{"node": "Parse Report", "type": "main", "index": 0}]]},
+    "Parse Report": {"main": [[{"node": "Build Report Doc", "type": "main", "index": 0}]]},
+    "Build Report Doc": {"main": [[{"node": "Has Email?", "type": "main", "index": 0}]]},
+    "Has Email?": {"main": [[{"node": "Email Report", "type": "main", "index": 0}], [{"node": "Return Report", "type": "main", "index": 0}]]},
+    "Email Report": {"main": [[{"node": "Return Report", "type": "main", "index": 0}]]}
+  },
+  "pinData": {}, "settings": {"executionOrder": "v1", "saveManualExecutions": true},
+  "staticData": null, "tags": ["research", "reports", "analysis"], "triggerCount": 0,
+  "updatedAt": "2025-05-17T09:00:00.000Z", "versionId": "v1.0.0"
+}

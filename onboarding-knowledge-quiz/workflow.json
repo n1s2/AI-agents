@@ -1,0 +1,673 @@
+{
+  "name": "Onboarding Knowledge Quiz Generator",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "generate-quiz",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "g3j6m9p2-0001",
+      "name": "Webhook \u2013 Generate Quiz",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "submit-quiz",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "g3j6m9p2-0002",
+      "name": "Webhook \u2013 Submit Answers",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['topic', 'role'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nconst difficulty = ['beginner','intermediate','advanced','mixed'].includes(body.difficulty) ? body.difficulty : 'mixed';\nconst quizType = ['multiple_choice','true_false','short_answer','mixed'].includes(body.quiz_type) ? body.quiz_type : 'multiple_choice';\nreturn [{ json: { valid: true, quizId: `QZ-${Date.now()}`, topic: body.topic.trim(), role: body.role.trim(), companyContext: (body.company_context||'').slice(0,500), sourceContent: (body.source_content||'').slice(0,5000), questionCount: Math.min(20,Math.max(3,parseInt(body.question_count)||10)), difficulty, quizType, passingScore: parseInt(body.passing_score)||70, recipientEmail: body.recipient_email||'', managerEmail: body.manager_email||'', replyEmail: body.reply_email||null, requestedAt: new Date().toISOString() } }];"
+      },
+      "id": "g3j6m9p2-0003",
+      "name": "Validate Quiz Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cv1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "g3j6m9p2-0004",
+      "name": "Quiz Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "g3j6m9p2-0005",
+      "name": "Return Quiz Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "temperature": 0.6,
+          "maxTokens": 3000
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You generate onboarding knowledge quizzes. Good quizzes test practical understanding, not memorization. Questions should test things that actually matter for the role, with plausible distractors for multiple choice. Include a brief explanation with each correct answer \u2014 wrong answers become learning moments. Always respond in valid JSON only.",
+              "role": "system"
+            },
+            {
+              "content": "Generate an onboarding quiz.\n\nTopic: {{ $json.topic }}\nRole: {{ $json.role }}\nCompany context: {{ $json.companyContext || 'not provided' }}\nNumber of questions: {{ $json.questionCount }}\nDifficulty: {{ $json.difficulty }}\nQuiz type: {{ $json.quizType }}\nPassing score: {{ $json.passingScore }}%\n\nSource content:\n{{ $json.sourceContent || 'Generate questions based on standard knowledge for this topic and role.' }}\n\nReturn this JSON:\n{\n  \"quiz_title\": \"quiz title\",\n  \"quiz_description\": \"1-2 sentences on what this quiz covers\",\n  \"estimated_minutes\": 10,\n  \"questions\": [\n    {\n      \"id\": \"Q1\",\n      \"type\": \"multiple_choice\",\n      \"question\": \"question text\",\n      \"options\": [\"A. option\", \"B. option\", \"C. option\", \"D. option\"],\n      \"correct_answer\": \"A\",\n      \"explanation\": \"why correct and why wrong options are wrong\",\n      \"difficulty\": \"beginner\",\n      \"topic_area\": \"sub-topic\"\n    }\n  ],\n  \"learning_objectives\": [\"what a passing employee should understand\"],\n  \"study_resources\": [\"things to review if struggling\"]\n}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "g3j6m9p2-0006",
+      "name": "Claude Quiz Generator",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        860,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet quiz;\ntry { quiz = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst input = $('Validate Quiz Request').first().json;\nquiz._meta = { quizId: input.quizId, topic: input.topic, role: input.role, passingScore: input.passingScore, recipientEmail: input.recipientEmail, managerEmail: input.managerEmail, replyEmail: input.replyEmail, createdAt: new Date().toISOString() };\nquiz.questions_for_employee = quiz.questions.map(q => ({ id: q.id, type: q.type, question: q.question, options: q.options, difficulty: q.difficulty, topic_area: q.topic_area }));\nreturn [{ json: quiz }];"
+      },
+      "id": "g3j6m9p2-0007",
+      "name": "Parse Quiz",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.QUIZ_SHEET_ID}}",
+        "sheetName": "Quizzes",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "quiz_id": "={{ $json._meta.quizId }}",
+            "created_at": "={{ $json._meta.createdAt }}",
+            "topic": "={{ $json._meta.topic }}",
+            "role": "={{ $json._meta.role }}",
+            "question_count": "={{ $json.questions.length }}",
+            "passing_score": "={{ $json._meta.passingScore }}",
+            "quiz_json": "={{ JSON.stringify($json.questions) }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "g3j6m9p2-0008",
+      "name": "Save Quiz",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        1300,
+        160
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const q = $input.first().json;\nconst m = q._meta;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nconst questionBlocks = (q.questions_for_employee||[]).map((question, idx) => {\n  const optionRows = (question.options||[]).map((opt, oi) => `<div style=\"display:flex;gap:10px;align-items:center;padding:8px 12px;border:1px solid #e5e7eb;border-radius:6px;margin-bottom:6px\"><input type=\"radio\" name=\"${esc(question.id)}\" value=\"${String.fromCharCode(65+oi)}\" id=\"${esc(question.id)}_${oi}\"><label for=\"${esc(question.id)}_${oi}\" style=\"font-size:14px;cursor:pointer\">${esc(opt)}</label></div>`).join('');\n  const tfOptions = question.type === 'true_false' ? `<div style=\"display:flex;gap:12px;margin-top:8px\"><label style=\"display:flex;gap:6px;cursor:pointer\"><input type=\"radio\" name=\"${esc(question.id)}\" value=\"True\"> True</label><label style=\"display:flex;gap:6px;cursor:pointer\"><input type=\"radio\" name=\"${esc(question.id)}\" value=\"False\"> False</label></div>` : '';\n  const shortAnswer = question.type === 'short_answer' ? `<textarea name=\"${esc(question.id)}\" style=\"width:100%;border:1px solid #e5e7eb;border-radius:6px;padding:10px;font-size:14px;margin-top:8px;min-height:80px\" placeholder=\"Your answer...\"></textarea>` : '';\n  return `<div style=\"background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:18px 20px;margin-bottom:14px\"><div style=\"font-size:12px;color:#9ca3af;margin-bottom:6px\">Q${idx+1} \u00b7 ${esc(question.topic_area||'')} \u00b7 ${esc(question.difficulty||'')}</div><div style=\"font-size:15px;font-weight:600;color:#1a1a1a;margin-bottom:12px\">${esc(question.question)}</div>${question.type === 'multiple_choice' ? optionRows : ''}${question.type === 'true_false' ? tfOptions : ''}${question.type === 'short_answer' ? shortAnswer : ''}</div>`;\n}).join('');\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head><body style=\"margin:0;padding:16px;background:#f9fafb;font-family:sans-serif\"><div style=\"max-width:680px;margin:0 auto\"><div style=\"background:#1e293b;color:#fff;padding:20px 24px;border-radius:10px 10px 0 0\"><div style=\"font-size:11px;text-transform:uppercase;color:#64748b;margin-bottom:5px\">Onboarding Quiz \u00b7 ${esc(m.role)}</div><div style=\"font-size:18px;font-weight:700\">${esc(q.quiz_title)}</div><div style=\"font-size:13px;color:#94a3b8;margin-top:4px\">${q.questions_for_employee.length} questions \u00b7 ~${q.estimated_minutes||10} min \u00b7 Passing: ${m.passingScore}%</div></div><div style=\"background:#eff6ff;padding:14px 24px;border:1px solid #bfdbfe;border-top:none\"><p style=\"font-size:14px;color:#1e3a8a;margin:0\">${esc(q.quiz_description)}</p></div><div style=\"background:#f9fafb;padding:16px 24px;border:1px solid #e5e7eb;border-top:none\">${questionBlocks}</div><div style=\"background:#fff;padding:14px 24px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6;text-align:center;font-size:12px;color:#9ca3af\">Quiz ID: ${esc(m.quizId)} \u00b7 Submit answers via POST to /submit-quiz</div></div></body></html>`;\nreturn [{ json: { html, quizId: m.quizId, quizTitle: q.quiz_title, replyEmail: m.replyEmail, recipientEmail: m.recipientEmail, quiz: q } }];"
+      },
+      "id": "g3j6m9p2-0009",
+      "name": "Build Quiz HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cre",
+              "leftValue": "={{ $json.recipientEmail || $json.replyEmail || '' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "g3j6m9p2-0010",
+      "name": "Send to Employee?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{ $json.recipientEmail || $json.replyEmail }}",
+        "subject": "Your onboarding quiz: {{ $json.quizTitle }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "g3j6m9p2-0011",
+      "name": "Email Quiz",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1740,
+        200
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'generated', quiz_id: $json.quizId, title: $json.quizTitle, question_count: $json.quiz.questions.length, emailed: ($json.recipientEmail || $json.replyEmail) ? true : false, quiz_for_employee: $json.quiz.questions_for_employee, meta: { passing_score: $json.quiz._meta.passingScore } } }}"
+      },
+      "id": "g3j6m9p2-0012",
+      "name": "Return Quiz",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1960,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['quiz_id', 'respondent_name', 'your_answers'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nreturn [{ json: { valid: true, quizId: body.quiz_id, respondentName: body.respondent_name, respondentEmail: body.respondent_email||'', yourAnswers: body.your_answers, submittedAt: new Date().toISOString() } }];"
+      },
+      "id": "g3j6m9p2-0013",
+      "name": "Validate Submission",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "csv",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "g3j6m9p2-0014",
+      "name": "Sub Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error, status: 400 } }}"
+      },
+      "id": "g3j6m9p2-0015",
+      "name": "Return Sub Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        860,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.QUIZ_SHEET_ID}}",
+        "sheetName": "Quizzes",
+        "options": {}
+      },
+      "id": "g3j6m9p2-0016",
+      "name": "Load Quiz Data",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        860,
+        500
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $('Load Quiz Data').all().map(r => r.json);\nconst submission = $('Validate Submission').first().json;\nconst quizRow = rows.find(r => r.quiz_id === submission.quizId);\nif (!quizRow) return [{ json: { error: 'Quiz not found' } }];\nlet questions;\ntry { questions = JSON.parse(quizRow.quiz_json); } catch(e) { return [{ json: { error: 'Could not parse quiz data' } }]; }\nconst answers = submission.yourAnswers;\nlet correct = 0;\nconst results = questions.map(q => {\n  const given = answers[q.id];\n  const isCorrect = q.type === 'short_answer' ? (given||'').trim().length > 0 : String(given||'').toUpperCase() === String(q.correct_answer||'').toUpperCase();\n  if (isCorrect) correct++;\n  return { id: q.id, question: q.question, given_answer: given||'(no answer)', correct_answer: q.correct_answer, is_correct: isCorrect, explanation: q.explanation, topic_area: q.topic_area };\n});\nconst score = questions.length > 0 ? Math.round((correct/questions.length)*100) : 0;\nconst passed = score >= parseInt(quizRow.passing_score||70);\nconst byTopic = {};\nresults.forEach(r => { if (!byTopic[r.topic_area]) byTopic[r.topic_area] = {correct:0,total:0}; byTopic[r.topic_area].total++; if (r.is_correct) byTopic[r.topic_area].correct++; });\nreturn [{ json: { submission, results, score, correct, total: questions.length, passed, passingScore: parseInt(quizRow.passing_score||70), byTopic, quizRow } }];"
+      },
+      "id": "g3j6m9p2-0017",
+      "name": "Grade Quiz",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{$env.QUIZ_SHEET_ID}}",
+        "sheetName": "Results",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "submitted_at": "={{ $json.submission.submittedAt }}",
+            "quiz_id": "={{ $json.submission.quizId }}",
+            "respondent_name": "={{ $json.submission.respondentName }}",
+            "respondent_email": "={{ $json.submission.respondentEmail }}",
+            "score": "={{ $json.score }}",
+            "correct": "={{ $json.correct }}",
+            "total": "={{ $json.total }}",
+            "passed": "={{ $json.passed }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "g3j6m9p2-0018",
+      "name": "Save Result",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        1300,
+        420
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-creds-01",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nconst passColor = d.passed ? '#16a34a' : '#dc2626';\nconst resultRows = d.results.map(r => `<div style=\"border:1px solid ${r.is_correct?'#bbf7d0':'#fecaca'};border-radius:6px;margin-bottom:10px;overflow:hidden\"><div style=\"background:${r.is_correct?'#f0fdf4':'#fef2f2'};padding:10px 14px;display:flex;justify-content:space-between;align-items:flex-start\"><div style=\"font-size:14px;font-weight:600;flex:1;margin-right:10px\">${esc(r.question)}</div><span style=\"background:${r.is_correct?'#16a34a':'#dc2626'};color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:8px;white-space:nowrap\">${r.is_correct?'Correct':'Incorrect'}</span></div><div style=\"padding:10px 14px;font-size:13px\"><div><strong>Your answer:</strong> <span style=\"color:${r.is_correct?'#16a34a':'#dc2626'}\">${esc(r.given_answer)}</span></div>${!r.is_correct?`<div><strong>Correct:</strong> <span style=\"color:#16a34a\">${esc(r.correct_answer)}</span></div>`:''}<div style=\"color:#6b7280;font-style:italic;margin-top:4px\">${esc(r.explanation)}</div></div></div>`).join('');\nconst topicRows = Object.entries(d.byTopic).map(([t,s]) => { const pct = Math.round(s.correct/s.total*100); return `<div style=\"display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f3f4f6\"><span style=\"font-size:14px\">${esc(t)}</span><span style=\"font-size:14px;font-weight:600;color:${pct>=70?'#16a34a':pct>=50?'#d97706':'#dc2626'}\">${s.correct}/${s.total} (${pct}%)</span></div>`; }).join('');\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body style=\"margin:0;padding:16px;background:#f9fafb;font-family:sans-serif\"><div style=\"max-width:660px;margin:0 auto\"><div style=\"background:#1e293b;color:#fff;padding:18px 24px;border-radius:10px 10px 0 0\"><div style=\"font-size:18px;font-weight:700\">${esc(d.submission.respondentName)} \u2014 Quiz Results</div></div><div style=\"background:${d.passed?'#f0fdf4':'#fef2f2'};padding:16px 24px;border:1px solid ${d.passed?'#bbf7d0':'#fecaca'};border-top:none;display:flex;align-items:center;justify-content:space-between\"><div><span style=\"background:${passColor};color:#fff;font-size:14px;font-weight:700;padding:5px 18px;border-radius:14px\">${d.passed?'PASSED':'NOT PASSED'}</span><div style=\"font-size:13px;color:#555;margin-top:6px\">Passing score: ${d.passingScore}%</div></div><div style=\"text-align:right\"><div style=\"font-size:40px;font-weight:800;color:${passColor}\">${d.score}%</div><div style=\"font-size:13px;color:#6b7280\">${d.correct} of ${d.total} correct</div></div></div>${topicRows?`<div style=\"background:#fff;padding:14px 24px;border:1px solid #e5e7eb;border-top:none\">${topicRows}</div>`:''}<div style=\"background:#fff;padding:14px 24px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">${resultRows}</div></div></body></html>`;\nreturn [{ json: { html, respondentEmail: d.submission.respondentEmail, respondentName: d.submission.respondentName, score: d.score, passed: d.passed, quizId: d.submission.quizId, results: d } }];"
+      },
+      "id": "g3j6m9p2-0019",
+      "name": "Build Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "cee",
+              "leftValue": "={{ $json.respondentEmail }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "g3j6m9p2-0020",
+      "name": "Email Results?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}",
+        "toEmail": "={{$json.respondentEmail}}",
+        "subject": "Quiz results: {{ $json.score }}% \u2014 {{ $json.passed ? 'Passed' : 'Review needed' }}",
+        "emailType": "html",
+        "message": "={{$json.html}}"
+      },
+      "id": "g3j6m9p2-0021",
+      "name": "Email Results",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1740,
+        500
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds-01",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'graded', quiz_id: $json.quizId, respondent: $json.respondentName, score: $json.score, passed: $json.passed, results: $json.results } }}"
+      },
+      "id": "g3j6m9p2-0022",
+      "name": "Return Results",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1960,
+        560
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook \u2013 Generate Quiz": {
+      "main": [
+        [
+          {
+            "node": "Validate Quiz Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Quiz Request": {
+      "main": [
+        [
+          {
+            "node": "Quiz Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quiz Valid?": {
+      "main": [
+        [
+          {
+            "node": "Claude Quiz Generator",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Quiz Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Quiz Generator": {
+      "main": [
+        [
+          {
+            "node": "Parse Quiz",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Quiz": {
+      "main": [
+        [
+          {
+            "node": "Save Quiz",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build Quiz HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Quiz HTML": {
+      "main": [
+        [
+          {
+            "node": "Send to Employee?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send to Employee?": {
+      "main": [
+        [
+          {
+            "node": "Email Quiz",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Quiz",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Quiz": {
+      "main": [
+        [
+          {
+            "node": "Return Quiz",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook \u2013 Submit Answers": {
+      "main": [
+        [
+          {
+            "node": "Validate Submission",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Submission": {
+      "main": [
+        [
+          {
+            "node": "Sub Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sub Valid?": {
+      "main": [
+        [
+          {
+            "node": "Load Quiz Data",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Sub Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Quiz Data": {
+      "main": [
+        [
+          {
+            "node": "Grade Quiz",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Grade Quiz": {
+      "main": [
+        [
+          {
+            "node": "Save Result",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Results": {
+      "main": [
+        [
+          {
+            "node": "Email Results?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Results?": {
+      "main": [
+        [
+          {
+            "node": "Email Results",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Results": {
+      "main": [
+        [
+          {
+            "node": "Return Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    "hr",
+    "onboarding",
+    "learning",
+    "quiz"
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2025-05-17T10:00:00.000Z",
+  "versionId": "v1.0.0"
+}
