@@ -1,0 +1,82 @@
+{
+  "name": "API Documentation Generator",
+  "nodes": [
+    {
+      "parameters": {"httpMethod": "POST", "path": "generate-api-docs", "responseMode": "responseNode", "options": {}},
+      "id": "k7n1q4t6-0001", "name": "Webhook",
+      "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [200, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['endpoint_path', 'http_method', 'description'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nconst methods = ['GET','POST','PUT','PATCH','DELETE'];\nconst method = methods.includes((body.http_method||'').toUpperCase()) ? body.http_method.toUpperCase() : 'GET';\nreturn [{ json: {\n  valid: true,\n  endpointPath: body.endpoint_path.trim(),\n  httpMethod: method,\n  description: body.description.trim().slice(0,500),\n  authType: body.auth_type || 'Bearer token',\n  pathParams: body.path_params || [],\n  queryParams: body.query_params || [],\n  requestBodySchema: body.request_body_schema || null,\n  responseBodySchema: body.response_body_schema || null,\n  errorCodes: body.error_codes || [],\n  rateLimits: body.rate_limits || '',\n  exampleUseCase: body.example_use_case || '',\n  apiName: body.api_name || 'API',\n  baseUrl: body.base_url || 'https://api.example.com',\n  replyEmail: body.reply_email || null\n} }];"
+      },
+      "id": "k7n1q4t6-0002", "name": "Validate Input",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [420, 320]
+    },
+    {
+      "parameters": {"conditions": {"conditions": [{"id": "cv", "leftValue": "={{ $json.valid }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true"}}], "combinator": "and"}},
+      "id": "k7n1q4t6-0003", "name": "Valid?",
+      "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [640, 320]
+    },
+    {
+      "parameters": {"respondWith": "json", "responseBody": "={{ { error: $json.error, status: 400 } }}"},
+      "id": "k7n1q4t6-0004", "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1, "position": [860, 480]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {"temperature": 0.3, "maxTokens": 2500},
+        "messages": {"values": [
+          {"content": "You write clear, complete API endpoint documentation in the style of Stripe or Twilio docs — precise, example-rich, scannable. You generate realistic example request/response payloads consistent with any schema provided. You never invent fields not implied by what's given. Always respond in valid JSON only.", "role": "system"},
+          {"content": "Document this API endpoint.\n\nAPI: {{ $json.apiName }}\nBase URL: {{ $json.baseUrl }}\nEndpoint: {{ $json.httpMethod }} {{ $json.endpointPath }}\nDescription: {{ $json.description }}\nAuth: {{ $json.authType }}\nPath params: {{ JSON.stringify($json.pathParams) }}\nQuery params: {{ JSON.stringify($json.queryParams) }}\nRequest body schema: {{ JSON.stringify($json.requestBodySchema) }}\nResponse body schema: {{ JSON.stringify($json.responseBodySchema) }}\nError codes: {{ JSON.stringify($json.errorCodes) }}\nRate limits: {{ $json.rateLimits || 'not specified' }}\nUse case: {{ $json.exampleUseCase || 'not specified' }}\n\nReturn this JSON:\n{\n  \"title\": \"endpoint title\",\n  \"summary\": \"1-2 sentence summary\",\n  \"auth_note\": \"how auth works for this endpoint\",\n  \"path_params_table\": [{\"name\":\"\",\"type\":\"\",\"required\":true,\"description\":\"\"}],\n  \"query_params_table\": [{\"name\":\"\",\"type\":\"\",\"required\":false,\"description\":\"\"}],\n  \"request_body_table\": [{\"field\":\"\",\"type\":\"\",\"required\":true,\"description\":\"\"}],\n  \"example_curl\": \"complete curl command\",\n  \"example_request_body\": \"JSON string example, null if GET/DELETE with no body\",\n  \"example_response_success\": \"JSON string example of 200/201 response\",\n  \"example_response_error\": \"JSON string example of an error response\",\n  \"error_table\": [{\"code\":\"\",\"meaning\":\"\",\"common_cause\":\"\"}],\n  \"notes\": [\"important implementation notes, gotchas, or best practices\"],\n  \"markdown_doc\": \"the complete documentation as a single markdown string ready to paste into docs\"\n}", "role": "user"}
+        ]}
+      },
+      "id": "k7n1q4t6-0005", "name": "Claude Docs Writer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic", "typeVersion": 1.3, "position": [860, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet docs;\ntry { docs = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst input = $('Validate Input').first().json;\ndocs._meta = { apiName: input.apiName, endpointPath: input.endpointPath, httpMethod: input.httpMethod, replyEmail: input.replyEmail };\nreturn [{ json: docs }];"
+      },
+      "id": "k7n1q4t6-0006", "name": "Parse Docs",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1080, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nconst m = d._meta;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nconst methodColors = {GET:'#16a34a',POST:'#2563eb',PUT:'#d97706',PATCH:'#7c3aed',DELETE:'#dc2626'};\nconst mc = methodColors[m.httpMethod]||'#6b7280';\nconst paramTable = (rows,headers) => rows && rows.length ? `<table style=\"width:100%;border-collapse:collapse;margin-bottom:16px\"><thead><tr style=\"font-size:11px;text-transform:uppercase;color:#9ca3af\">${headers.map(h=>`<th style=\"padding:6px 10px;text-align:left\">${h}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr style=\"border-bottom:1px solid #f3f4f6;font-size:13px\"><td style=\"padding:6px 10px;font-family:monospace\">${esc(r.name||r.field||r.code)}</td><td style=\"padding:6px 10px;color:#6b7280\">${esc(r.type||r.meaning||'')}</td><td style=\"padding:6px 10px\">${r.required!==undefined?(r.required?'✓':'—'):''}${r.common_cause?esc(r.common_cause):''}</td><td style=\"padding:6px 10px;color:#374151\">${esc(r.description||'')}</td></tr>`).join('')}</tbody></table>` : '';\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body style=\"margin:0;padding:16px;background:#f9fafb;font-family:-apple-system,sans-serif;color:#111\"><div style=\"max-width:720px;margin:0 auto\"><div style=\"background:#111827;color:#fff;padding:20px 28px;border-radius:10px 10px 0 0\"><div style=\"font-size:11px;text-transform:uppercase;color:#6b7280\">${esc(m.apiName)} API Docs</div><div style=\"display:flex;gap:10px;align-items:center;margin-top:6px\"><span style=\"background:${mc};color:#fff;font-size:12px;font-weight:700;padding:3px 10px;border-radius:4px\">${esc(m.httpMethod)}</span><code style=\"font-size:15px\">${esc(m.endpointPath)}</code></div></div><div style=\"background:#fff;padding:18px 28px;border:1px solid #e5e7eb;border-top:none\"><h2 style=\"font-size:18px;margin:0 0 6px\">${esc(d.title)}</h2><p style=\"font-size:14px;color:#374151;line-height:1.6\">${esc(d.summary)}</p></div><div style=\"background:#1e293b;padding:16px 28px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\"><pre style=\"color:#86efac;font-size:13px;overflow-x:auto;margin:0;white-space:pre-wrap\">${esc(d.example_curl)}</pre></div>${paramTable(d.path_params_table,['Name','Type','Required',''])?`<div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb\"><h3 style=\"font-size:13px;text-transform:uppercase;color:#9ca3af\">Path Parameters</h3>${paramTable(d.path_params_table,['Name','Type','Required',''])}</div>`:''}${paramTable(d.query_params_table,['Name','Type','Required',''])?`<div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb\"><h3 style=\"font-size:13px;text-transform:uppercase;color:#9ca3af\">Query Parameters</h3>${paramTable(d.query_params_table,['Name','Type','Required',''])}</div>`:''}<div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb\"><h3 style=\"font-size:13px;text-transform:uppercase;color:#9ca3af\">Example Response</h3><pre style=\"background:#f9fafb;padding:12px;border-radius:6px;font-size:12px;overflow-x:auto\">${esc(d.example_response_success)}</pre></div>${paramTable(d.error_table,['Code','Meaning','Cause',''])?`<div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb\"><h3 style=\"font-size:13px;text-transform:uppercase;color:#9ca3af\">Errors</h3>${paramTable(d.error_table,['Code','Meaning','Cause',''])}</div>`:''}<div style=\"background:#111827;color:#4b5563;font-size:11px;padding:10px 28px;border-radius:0 0 10px 10px;text-align:center\">API Docs Generator</div></div></body></html>`;\nreturn [{ json: { html, replyEmail: m.replyEmail, apiName: m.apiName, endpointPath: m.endpointPath, docs: d } }];"
+      },
+      "id": "k7n1q4t6-0007", "name": "Build Doc",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1300, 240]
+    },
+    {
+      "parameters": {"conditions": {"conditions": [{"id": "ce", "leftValue": "={{ $json.replyEmail }}", "rightValue": "", "operator": {"type": "string", "operation": "notEmpty"}}], "combinator": "and"}},
+      "id": "k7n1q4t6-0008", "name": "Has Email?",
+      "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [1520, 240]
+    },
+    {
+      "parameters": {"fromEmail": "={{$env.FROM_EMAIL}}", "toEmail": "={{$json.replyEmail}}", "subject": "API docs: {{ $json.endpointPath }}", "emailType": "html", "message": "={{$json.html}}"},
+      "id": "k7n1q4t6-0009", "name": "Email Doc",
+      "type": "n8n-nodes-base.emailSend", "typeVersion": 2.1, "position": [1740, 180],
+      "credentials": {"smtp": {"id": "smtp-creds-01", "name": "SMTP Account"}}
+    },
+    {
+      "parameters": {"respondWith": "json", "responseBody": "={{ { status: 'generated', endpoint: $json.endpointPath, emailed: $json.replyEmail ? true : false, docs: $json.docs } }}"},
+      "id": "k7n1q4t6-0010", "name": "Return Docs",
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1, "position": [1960, 240]
+    }
+  ],
+  "connections": {
+    "Webhook": {"main": [[{"node": "Validate Input", "type": "main", "index": 0}]]},
+    "Validate Input": {"main": [[{"node": "Valid?", "type": "main", "index": 0}]]},
+    "Valid?": {"main": [[{"node": "Claude Docs Writer", "type": "main", "index": 0}], [{"node": "Return Error", "type": "main", "index": 0}]]},
+    "Claude Docs Writer": {"main": [[{"node": "Parse Docs", "type": "main", "index": 0}]]},
+    "Parse Docs": {"main": [[{"node": "Build Doc", "type": "main", "index": 0}]]},
+    "Build Doc": {"main": [[{"node": "Has Email?", "type": "main", "index": 0}]]},
+    "Has Email?": {"main": [[{"node": "Email Doc", "type": "main", "index": 0}], [{"node": "Return Docs", "type": "main", "index": 0}]]},
+    "Email Doc": {"main": [[{"node": "Return Docs", "type": "main", "index": 0}]]}
+  },
+  "pinData": {}, "settings": {"executionOrder": "v1", "saveManualExecutions": true},
+  "staticData": null, "tags": ["developer-tools", "documentation", "api"], "triggerCount": 0,
+  "updatedAt": "2025-05-18T10:00:00.000Z", "versionId": "v1.0.0"
+}

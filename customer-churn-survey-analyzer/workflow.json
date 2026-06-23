@@ -1,0 +1,149 @@
+{
+  "name": "Customer Churn Survey Analyzer",
+  "nodes": [
+    {
+      "parameters": {"httpMethod": "POST", "path": "churn-survey-response", "responseMode": "responseNode", "options": {}},
+      "id": "i5l8o2r4-0001", "name": "Webhook - Submit Response",
+      "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [200, 260]
+    },
+    {
+      "parameters": {"rule": {"interval": [{"field": "weeks", "weeksInterval": 1, "triggerAtDay": [1], "triggerAtHour": 8, "triggerAtMinute": 0}]}},
+      "id": "i5l8o2r4-0002", "name": "Weekly Monday 8am",
+      "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.1, "position": [200, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['customer_name', 'cancellation_reason', 'free_text_feedback'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nreturn [{ json: { valid: true, responseId: `CR-${Date.now()}`, customerName: body.customer_name.trim(), customerEmail: body.customer_email||'', accountTier: body.account_tier||'', monthsAsCustomer: parseInt(body.months_as_customer)||null, mrr: parseFloat(body.mrr)||null, currency: body.currency||'USD', cancellationReason: body.cancellation_reason.trim(), freeTextFeedback: body.free_text_feedback.trim().slice(0,2000), competitorSwitchedTo: body.competitor_switched_to||'', wouldRecommend: body.would_recommend!==undefined?parseInt(body.would_recommend):null, winbackInterest: body.winback_interest===true||body.winback_interest==='true', submittedAt: new Date().toISOString() } }];"
+      },
+      "id": "i5l8o2r4-0003", "name": "Validate Response",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [420, 260]
+    },
+    {
+      "parameters": {"conditions": {"conditions": [{"id": "cv", "leftValue": "={{ $json.valid }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true"}}], "combinator": "and"}},
+      "id": "i5l8o2r4-0004", "name": "Valid?",
+      "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [640, 260]
+    },
+    {
+      "parameters": {"respondWith": "json", "responseBody": "={{ { error: $json.error, status: 400 } }}"},
+      "id": "i5l8o2r4-0005", "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1, "position": [860, 380]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {"temperature": 0.3, "maxTokens": 800},
+        "messages": {"values": [
+          {"content": "You categorize and analyze individual customer churn survey responses for a SaaS company. You identify the real underlying reason (which may differ from the stated reason), assess if this is a save-able situation, and flag anything urgent. Always respond in valid JSON only.", "role": "system"},
+          {"content": "Analyze this churn response.\n\nCustomer: {{ $json.customerName }} ({{ $json.accountTier || 'unknown tier' }})\nMonths as customer: {{ $json.monthsAsCustomer || 'unknown' }}\nMRR: {{ $json.mrr ? $json.currency + $json.mrr : 'unknown' }}\nStated reason: {{ $json.cancellationReason }}\nFeedback: {{ $json.freeTextFeedback }}\nSwitched to: {{ $json.competitorSwitchedTo || 'not specified' }}\nWould recommend (0-10): {{ $json.wouldRecommend !== null ? $json.wouldRecommend : 'not given' }}\nOpen to winback: {{ $json.winbackInterest }}\n\nReturn this JSON:\n{\n  \"primary_category\": \"one of: price | missing_feature | poor_support | found_alternative | no_longer_needed | poor_onboarding | bug_reliability | usability | business_closed | other\",\n  \"underlying_reason\": \"one sentence on what's REALLY driving this, which may differ from stated reason\",\n  \"sentiment\": \"one of: neutral | disappointed | frustrated | angry\",\n  \"save_potential\": \"one of: high | medium | low | none\",\n  \"save_potential_note\": \"why\",\n  \"urgent_flag\": false,\n  \"urgent_flag_reason\": null,\n  \"suggested_action\": \"specific action for CS team if save_potential is not none, else null\"\n}", "role": "user"}
+        ]}
+      },
+      "id": "i5l8o2r4-0006", "name": "Claude Response Analyzer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic", "typeVersion": 1.3, "position": [860, 220]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet analysis;\ntry { analysis = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst input = $('Validate Response').first().json;\nanalysis._response = input;\nreturn [{ json: analysis }];"
+      },
+      "id": "i5l8o2r4-0007", "name": "Parse Analysis",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1080, 220]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate", "documentId": "={{$env.CHURN_SURVEY_SHEET_ID}}", "sheetName": "Responses",
+        "columns": {"mappingMode": "defineBelow", "value": {
+          "response_id": "={{ $json._response.responseId }}", "submitted_at": "={{ $json._response.submittedAt }}",
+          "customer_name": "={{ $json._response.customerName }}", "account_tier": "={{ $json._response.accountTier }}",
+          "mrr": "={{ $json._response.mrr }}", "currency": "={{ $json._response.currency }}",
+          "stated_reason": "={{ $json._response.cancellationReason }}", "primary_category": "={{ $json.primary_category }}",
+          "underlying_reason": "={{ $json.underlying_reason }}", "sentiment": "={{ $json.sentiment }}",
+          "save_potential": "={{ $json.save_potential }}", "urgent_flag": "={{ $json.urgent_flag }}",
+          "winback_interest": "={{ $json._response.winbackInterest }}", "would_recommend": "={{ $json._response.wouldRecommend }}"
+        }}, "options": {}
+      },
+      "id": "i5l8o2r4-0008", "name": "Log Response",
+      "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.3, "position": [1300, 160],
+      "credentials": {"googleSheetsOAuth2Api": {"id": "google-creds-01", "name": "Google Sheets"}}
+    },
+    {
+      "parameters": {"conditions": {"conditions": [{"id": "cu", "leftValue": "={{ $json.urgent_flag }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true"}}], "combinator": "and"}},
+      "id": "i5l8o2r4-0009", "name": "Urgent?",
+      "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [1300, 300]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}", "toEmail": "={{$env.CS_LEAD_EMAIL}}",
+        "subject": "🚨 Urgent churn flag: {{ $json._response.customerName }}",
+        "emailType": "text",
+        "message": "={{ $json._response.customerName }} ({{ $json._response.accountTier }}, {{ $json._response.currency }}{{ $json._response.mrr }}/mo)\n\nReason: {{ $json.urgent_flag_reason }}\n\nStated reason: {{ $json._response.cancellationReason }}\nFeedback: {{ $json._response.freeTextFeedback }}\n\nSave potential: {{ $json.save_potential }} — {{ $json.save_potential_note }}\nSuggested action: {{ $json.suggested_action }}"
+      },
+      "id": "i5l8o2r4-0010", "name": "Alert Urgent",
+      "type": "n8n-nodes-base.emailSend", "typeVersion": 2.1, "position": [1520, 300],
+      "credentials": {"smtp": {"id": "smtp-creds-01", "name": "SMTP Account"}}
+    },
+    {
+      "parameters": {"respondWith": "json", "responseBody": "={{ { status: 'analyzed', response_id: $json._response.responseId, primary_category: $json.primary_category, save_potential: $json.save_potential, urgent: $json.urgent_flag } }}"},
+      "id": "i5l8o2r4-0011", "name": "Return Analysis",
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1, "position": [1740, 220]
+    },
+    {
+      "parameters": {"operation": "read", "documentId": "={{$env.CHURN_SURVEY_SHEET_ID}}", "sheetName": "Responses", "options": {}},
+      "id": "i5l8o2r4-0012", "name": "Load Week Responses",
+      "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.3, "position": [420, 500],
+      "credentials": {"googleSheetsOAuth2Api": {"id": "google-creds-01", "name": "Google Sheets"}}
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(r => r.json).filter(r => r.response_id);\nconst weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate()-7);\nconst recent = rows.filter(r => new Date(r.submitted_at) >= weekAgo);\nif (recent.length === 0) return [{ json: { hasData: false } }];\nconst byCategory = {};\nrecent.forEach(r => { byCategory[r.primary_category] = (byCategory[r.primary_category]||0)+1; });\nconst totalMrrLost = recent.reduce((s,r) => s + (parseFloat(r.mrr)||0), 0);\nconst saveable = recent.filter(r => r.save_potential==='high'||r.save_potential==='medium');\nreturn [{ json: { hasData: true, recent, byCategory, totalMrrLost: parseFloat(totalMrrLost.toFixed(2)), currency: recent[0]?.currency||'USD', count: recent.length, saveableCount: saveable.length, weekStart: weekAgo.toISOString().split('T')[0] } }];"
+      },
+      "id": "i5l8o2r4-0013", "name": "Aggregate Week",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [640, 500]
+    },
+    {
+      "parameters": {"conditions": {"conditions": [{"id": "chd", "leftValue": "={{ $json.hasData }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true"}}], "combinator": "and"}},
+      "id": "i5l8o2r4-0014", "name": "Has Data?",
+      "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [860, 500]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {"temperature": 0.5, "maxTokens": 700},
+        "messages": {"values": [
+          {"content": "You analyze weekly churn survey data for a product/CS leadership team. You identify patterns, distinguish signal from noise, and give specific recommendations. Under 220 words.", "role": "system"},
+          {"content": "Analyze this week's churn data.\n\nWeek of: {{ $json.weekStart }}\nTotal responses: {{ $json.count }}\nMRR lost: {{ $json.currency }}{{ $json.totalMrrLost }}\nSaveable (high/medium potential): {{ $json.saveableCount }}\n\nBy category:\n{{ Object.entries($json.byCategory).map(([c,n]) => c + ': ' + n).join(', ') }}\n\nUnderlying reasons:\n{{ $json.recent.map(r => r.underlying_reason).filter(Boolean).join(' | ') }}\n\nGive: the dominant pattern this week, whether it matches or differs from typical churn drivers, and one specific recommendation for product or CS.", "role": "user"}
+        ]}
+      },
+      "id": "i5l8o2r4-0015", "name": "Claude Weekly Analyst",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic", "typeVersion": 1.3, "position": [1080, 460]
+    },
+    {
+      "parameters": {
+        "jsCode": "const note = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nconst d = $('Aggregate Week').first().json;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nconst catRows = Object.entries(d.byCategory).sort((a,b)=>b[1]-a[1]).map(([c,n]) => `<div style=\"display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f3f4f6\"><span style=\"font-size:14px\">${esc(c.replace(/_/g,' '))}</span><span style=\"font-size:14px;font-weight:700\">${n}</span></div>`).join('');\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body style=\"margin:0;padding:16px;background:#f9fafb;font-family:sans-serif\"><div style=\"max-width:640px;margin:0 auto\"><div style=\"background:#111827;color:#fff;padding:18px 26px;border-radius:10px 10px 0 0\"><div style=\"font-size:11px;text-transform:uppercase;color:#6b7280\">Weekly Churn Digest · ${esc(d.weekStart)}</div><div style=\"font-size:18px;font-weight:700\">${d.count} cancellations · ${d.currency}${d.totalMrrLost} MRR lost</div><div style=\"font-size:13px;color:#9ca3af\">${d.saveableCount} flagged as saveable</div></div><div style=\"background:#fff;padding:16px 26px;border:1px solid #e5e7eb;border-top:none\"><p style=\"font-size:14px;line-height:1.7;color:#374151;margin:0\">${esc(note).replace(/\\n/g,'<br>')}</p></div><div style=\"background:#fff;padding:16px 26px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:8px\">By category</div>${catRows}</div></div></body></html>`;\nreturn [{ json: { html, count: d.count, mrrLost: d.totalMrrLost, currency: d.currency } }];"
+      },
+      "id": "i5l8o2r4-0016", "name": "Build Digest",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1300, 460]
+    },
+    {
+      "parameters": {"fromEmail": "={{$env.FROM_EMAIL}}", "toEmail": "={{$env.CS_LEAD_EMAIL}}", "subject": "Weekly churn digest — {{ $json.count }} lost · {{ $json.currency }}{{ $json.mrrLost }} MRR", "emailType": "html", "message": "={{$json.html}}"},
+      "id": "i5l8o2r4-0017", "name": "Send Digest",
+      "type": "n8n-nodes-base.emailSend", "typeVersion": 2.1, "position": [1520, 460],
+      "credentials": {"smtp": {"id": "smtp-creds-01", "name": "SMTP Account"}}
+    }
+  ],
+  "connections": {
+    "Webhook - Submit Response": {"main": [[{"node": "Validate Response", "type": "main", "index": 0}]]},
+    "Validate Response": {"main": [[{"node": "Valid?", "type": "main", "index": 0}]]},
+    "Valid?": {"main": [[{"node": "Claude Response Analyzer", "type": "main", "index": 0}], [{"node": "Return Error", "type": "main", "index": 0}]]},
+    "Claude Response Analyzer": {"main": [[{"node": "Parse Analysis", "type": "main", "index": 0}]]},
+    "Parse Analysis": {"main": [[{"node": "Log Response", "type": "main", "index": 0}, {"node": "Urgent?", "type": "main", "index": 0}, {"node": "Return Analysis", "type": "main", "index": 0}]]},
+    "Urgent?": {"main": [[{"node": "Alert Urgent", "type": "main", "index": 0}], []]},
+    "Weekly Monday 8am": {"main": [[{"node": "Load Week Responses", "type": "main", "index": 0}]]},
+    "Load Week Responses": {"main": [[{"node": "Aggregate Week", "type": "main", "index": 0}]]},
+    "Aggregate Week": {"main": [[{"node": "Has Data?", "type": "main", "index": 0}]]},
+    "Has Data?": {"main": [[{"node": "Claude Weekly Analyst", "type": "main", "index": 0}], []]},
+    "Claude Weekly Analyst": {"main": [[{"node": "Build Digest", "type": "main", "index": 0}]]},
+    "Build Digest": {"main": [[{"node": "Send Digest", "type": "main", "index": 0}]]}
+  },
+  "pinData": {}, "settings": {"executionOrder": "v1", "saveManualExecutions": true},
+  "staticData": null, "tags": ["churn", "saas", "customer-success", "surveys"], "triggerCount": 2,
+  "updatedAt": "2025-05-18T08:00:00.000Z", "versionId": "v1.0.0"
+}

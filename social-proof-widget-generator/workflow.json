@@ -1,0 +1,82 @@
+{
+  "name": "Social Proof Widget Copy Generator",
+  "nodes": [
+    {
+      "parameters": {"httpMethod": "POST", "path": "generate-social-proof", "responseMode": "responseNode", "options": {}},
+      "id": "j6m9p3s5-0001", "name": "Webhook",
+      "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [200, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nif (!body.product_name || !body.data_points) return [{ json: { valid: false, error: 'Missing product_name or data_points' } }];\nif (!Array.isArray(body.data_points) || body.data_points.length === 0) return [{ json: { valid: false, error: 'data_points must be a non-empty array' } }];\nconst placements = ['hero_banner','pricing_page','checkout','footer','popup','email_signature','sidebar'];\nconst placement = placements.includes(body.placement) ? body.placement : 'hero_banner';\nreturn [{ json: { valid: true, productName: body.product_name.trim(), dataPoints: body.data_points.slice(0,10), placement, tone: body.tone||'confident', targetAudience: body.target_audience||'', variantCount: Math.min(5, Math.max(1, parseInt(body.variant_count)||3)), replyEmail: body.reply_email||null } }];"
+      },
+      "id": "j6m9p3s5-0002", "name": "Validate Input",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [420, 320]
+    },
+    {
+      "parameters": {"conditions": {"conditions": [{"id": "cv", "leftValue": "={{ $json.valid }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true"}}], "combinator": "and"}},
+      "id": "j6m9p3s5-0003", "name": "Valid?",
+      "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [640, 320]
+    },
+    {
+      "parameters": {"respondWith": "json", "responseBody": "={{ { error: $json.error, status: 400 } }}"},
+      "id": "j6m9p3s5-0004", "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1, "position": [860, 480]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {"temperature": 0.65, "maxTokens": 1500},
+        "messages": {"values": [
+          {"content": "You write social proof microcopy — the short, punchy statements that appear near CTAs to build trust (e.g. '12,000+ teams trust Acme', 'Rated 4.8/5 by 2,300 customers'). Good social proof copy is specific, credible, and sized correctly for its placement. Never invent numbers not provided. Always respond in valid JSON only.", "role": "system"},
+          {"content": "Generate social proof copy.\n\nProduct: {{ $json.productName }}\nPlacement: {{ $json.placement.replace(/_/g,' ') }}\nTone: {{ $json.tone }}\nTarget audience: {{ $json.targetAudience || 'general' }}\nVariants needed: {{ $json.variantCount }}\n\nAvailable data points (use only these, do not invent numbers):\n{{ $json.dataPoints.map((d,i) => (i+1)+'. '+d).join('\\n') }}\n\nReturn this JSON:\n{\n  \"variants\": [\n    {\n      \"text\": \"the social proof copy\",\n      \"character_count\": 0,\n      \"data_point_used\": \"which data point this is based on\",\n      \"why_this_works\": \"one sentence\"\n    }\n  ],\n  \"placement_notes\": \"sizing/format guidance specific to this placement type\",\n  \"recommended_variant\": 1\n}", "role": "user"}
+        ]}
+      },
+      "id": "j6m9p3s5-0005", "name": "Claude Copywriter",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic", "typeVersion": 1.3, "position": [860, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet copy;\ntry { copy = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst input = $('Validate Input').first().json;\ncopy._meta = { productName: input.productName, placement: input.placement, replyEmail: input.replyEmail };\nreturn [{ json: copy }];"
+      },
+      "id": "j6m9p3s5-0006", "name": "Parse Copy",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1080, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const c = $input.first().json;\nconst m = c._meta;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nconst variantBlocks = (c.variants||[]).map((v,i) => `<div style=\"border:2px solid ${i+1===c.recommended_variant?'#16a34a':'#e5e7eb'};border-radius:8px;padding:16px 18px;margin-bottom:12px;background:${i+1===c.recommended_variant?'#f0fdf4':'#fff'}\"><div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:8px\"><span style=\"font-size:11px;font-weight:700;color:#9ca3af\">VARIANT ${i+1}${i+1===c.recommended_variant?' · RECOMMENDED':''}</span><span style=\"font-size:11px;color:#9ca3af\">${v.character_count||v.text.length} chars</span></div><div style=\"font-size:18px;font-weight:700;color:#1a1a1a;margin-bottom:8px\">${esc(v.text)}</div><div style=\"font-size:12px;color:#6b7280\">${esc(v.why_this_works)}</div></div>`).join('');\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body style=\"margin:0;padding:16px;background:#f9fafb;font-family:sans-serif\"><div style=\"max-width:600px;margin:0 auto\"><div style=\"background:#111827;color:#fff;padding:18px 24px;border-radius:10px 10px 0 0\"><div style=\"font-size:11px;text-transform:uppercase;color:#6b7280\">Social Proof Copy · ${esc(m.placement.replace(/_/g,' '))}</div><div style=\"font-size:18px;font-weight:700\">${esc(m.productName)}</div></div><div style=\"background:#fff;padding:18px 24px;border:1px solid #e5e7eb;border-top:none\">${variantBlocks}</div><div style=\"background:#eff6ff;padding:14px 24px;border:1px solid #bfdbfe\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#1d4ed8;margin-bottom:5px\">Placement notes</div><div style=\"font-size:13px;color:#1e40af\">${esc(c.placement_notes)}</div></div></div></body></html>`;\nreturn [{ json: { html, replyEmail: m.replyEmail, productName: m.productName, copy: c } }];"
+      },
+      "id": "j6m9p3s5-0007", "name": "Build Doc",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1300, 240]
+    },
+    {
+      "parameters": {"conditions": {"conditions": [{"id": "ce", "leftValue": "={{ $json.replyEmail }}", "rightValue": "", "operator": {"type": "string", "operation": "notEmpty"}}], "combinator": "and"}},
+      "id": "j6m9p3s5-0008", "name": "Has Email?",
+      "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [1520, 240]
+    },
+    {
+      "parameters": {"fromEmail": "={{$env.FROM_EMAIL}}", "toEmail": "={{$json.replyEmail}}", "subject": "Social proof copy: {{ $json.productName }}", "emailType": "html", "message": "={{$json.html}}"},
+      "id": "j6m9p3s5-0009", "name": "Email Copy",
+      "type": "n8n-nodes-base.emailSend", "typeVersion": 2.1, "position": [1740, 180],
+      "credentials": {"smtp": {"id": "smtp-creds-01", "name": "SMTP Account"}}
+    },
+    {
+      "parameters": {"respondWith": "json", "responseBody": "={{ { status: 'generated', product: $json.productName, emailed: $json.replyEmail ? true : false, copy: $json.copy } }}"},
+      "id": "j6m9p3s5-0010", "name": "Return Copy",
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1, "position": [1960, 240]
+    }
+  ],
+  "connections": {
+    "Webhook": {"main": [[{"node": "Validate Input", "type": "main", "index": 0}]]},
+    "Validate Input": {"main": [[{"node": "Valid?", "type": "main", "index": 0}]]},
+    "Valid?": {"main": [[{"node": "Claude Copywriter", "type": "main", "index": 0}], [{"node": "Return Error", "type": "main", "index": 0}]]},
+    "Claude Copywriter": {"main": [[{"node": "Parse Copy", "type": "main", "index": 0}]]},
+    "Parse Copy": {"main": [[{"node": "Build Doc", "type": "main", "index": 0}]]},
+    "Build Doc": {"main": [[{"node": "Has Email?", "type": "main", "index": 0}]]},
+    "Has Email?": {"main": [[{"node": "Email Copy", "type": "main", "index": 0}], [{"node": "Return Copy", "type": "main", "index": 0}]]},
+    "Email Copy": {"main": [[{"node": "Return Copy", "type": "main", "index": 0}]]}
+  },
+  "pinData": {}, "settings": {"executionOrder": "v1", "saveManualExecutions": true},
+  "staticData": null, "tags": ["marketing", "copywriting", "conversion"], "triggerCount": 0,
+  "updatedAt": "2025-05-18T09:00:00.000Z", "versionId": "v1.0.0"
+}
