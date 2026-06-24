@@ -1,0 +1,172 @@
+{
+  "name": "Invoice Payment Chaser Agent",
+  "nodes": [
+    {
+      "parameters": {"httpMethod": "POST", "path": "chase-invoice", "responseMode": "responseNode", "options": {}},
+      "id": "l8o2r5u7-0001", "name": "Webhook – Chase Invoice",
+      "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [200, 260]
+    },
+    {
+      "parameters": {"rule": {"interval": [{"field": "days", "daysInterval": 1, "triggerAtHour": 9, "triggerAtMinute": 0}]}},
+      "id": "l8o2r5u7-0002", "name": "Daily 9am Check",
+      "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.1, "position": [200, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['invoice_id', 'client_name', 'client_email', 'amount', 'currency', 'due_date', 'your_name'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nconst amount = parseFloat(body.amount);\nif (isNaN(amount) || amount <= 0) return [{ json: { valid: false, error: 'amount must be a positive number' } }];\nconst dueDate = new Date(body.due_date);\nif (isNaN(dueDate)) return [{ json: { valid: false, error: 'due_date must be valid (YYYY-MM-DD)' } }];\nconst today = new Date(); today.setHours(0,0,0,0);\nconst daysOverdue = Math.floor((today - dueDate) / 86400000);\nconst tones = ['gentle', 'firm', 'urgent', 'final_notice'];\nlet tone = body.tone || 'gentle';\nif (!tones.includes(tone)) {\n  if (daysOverdue <= 7) tone = 'gentle';\n  else if (daysOverdue <= 21) tone = 'firm';\n  else if (daysOverdue <= 45) tone = 'urgent';\n  else tone = 'final_notice';\n}\nreturn [{ json: {\n  valid: true,\n  invoiceId: body.invoice_id.trim(),\n  clientName: body.client_name.trim(),\n  clientEmail: body.client_email.trim(),\n  amount, currency: body.currency,\n  dueDate: body.due_date,\n  daysOverdue: Math.max(0, daysOverdue),\n  yourName: body.your_name.trim(),\n  yourCompany: body.your_company || '',\n  yourEmail: body.your_email || '',\n  projectDescription: (body.project_description || '').slice(0, 200),\n  paymentInstructions: (body.payment_instructions || '').slice(0, 300),\n  previousChaseCount: parseInt(body.previous_chase_count) || 0,\n  tone,\n  includeLateFee: body.include_late_fee === true || body.include_late_fee === 'true',\n  lateFeeAmount: parseFloat(body.late_fee_amount) || null,\n  sendEmail: body.send_email !== false,\n  replyEmail: body.reply_email || null\n} }];"
+      },
+      "id": "l8o2r5u7-0003", "name": "Validate Input",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [420, 260]
+    },
+    {
+      "parameters": {"conditions": {"conditions": [{"id": "cv", "leftValue": "={{ $json.valid }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true"}}], "combinator": "and"}},
+      "id": "l8o2r5u7-0004", "name": "Valid?",
+      "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [640, 260]
+    },
+    {
+      "parameters": {"respondWith": "json", "responseBody": "={{ { error: $json.error, status: 400 } }}"},
+      "id": "l8o2r5u7-0005", "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1, "position": [860, 400]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {"temperature": 0.5, "maxTokens": 700},
+        "messages": {"values": [
+          {"content": "You write invoice payment chase emails for freelancers and small businesses. You know that getting paid is legitimate and important, and a well-written chase email is professional, not awkward. You calibrate tone precisely: gentle (friendly reminder, assumes oversight), firm (direct, notes the delay matters), urgent (clear consequences, not rude), final_notice (legal/collections language, last chance). You never write groveling or apologetic emails — the client owes money. Always respond in valid JSON only.", "role": "system"},
+          {"content": "Write a payment chase email.\n\nInvoice: {{ $json.invoiceId }}\nClient: {{ $json.clientName }} ({{ $json.clientEmail }})\nAmount: {{ $json.currency }}{{ $json.amount }}\nDue: {{ $json.dueDate }}\nDays overdue: {{ $json.daysOverdue }}\nPrevious chases sent: {{ $json.previousChaseCount }}\nTone: {{ $json.tone }}\nYour name: {{ $json.yourName }}{{ $json.yourCompany ? ' at ' + $json.yourCompany : '' }}\nProject: {{ $json.projectDescription || 'not specified' }}\nPayment instructions: {{ $json.paymentInstructions || 'not specified' }}\nLate fee: {{ $json.includeLateFee ? $json.currency + ($json.lateFeeAmount || 'TBD') : 'not applicable' }}\n\nReturn this JSON:\n{\n  \"subject\": \"email subject line — invoice number and amount, clear without being aggressive for the tone\",\n  \"email_body\": \"complete email body — signed off with sender name. Tone must match exactly. If final_notice, include specific deadline (3 business days) and mention collections/legal next step. If includeLateFee is true, reference the late fee amount. Include payment instructions if provided.\",\n  \"tone_notes\": \"one sentence: what makes this tone appropriate for this situation\",\n  \"suggested_follow_up\": \"when and how to follow up if this email gets no response\"\n}", "role": "user"}
+        ]}
+      },
+      "id": "l8o2r5u7-0006", "name": "Claude Chase Writer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic", "typeVersion": 1.3, "position": [860, 220]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet chase;\ntry { chase = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst input = $('Validate Input').first().json;\nchase._invoice = input;\nreturn [{ json: chase }];"
+      },
+      "id": "l8o2r5u7-0007", "name": "Parse Chase",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1080, 220]
+    },
+    {
+      "parameters": {"conditions": {"conditions": [{"id": "cse", "leftValue": "={{ $json._invoice.sendEmail }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true"}}], "combinator": "and"}},
+      "id": "l8o2r5u7-0008", "name": "Send Email?",
+      "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [1300, 220]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $json._invoice.yourEmail || $env.FROM_EMAIL }}",
+        "toEmail": "={{ $json._invoice.clientEmail }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "text",
+        "message": "={{ $json.email_body }}"
+      },
+      "id": "l8o2r5u7-0009", "name": "Send Chase Email",
+      "type": "n8n-nodes-base.emailSend", "typeVersion": 2.1, "position": [1520, 160],
+      "credentials": {"smtp": {"id": "smtp-creds-01", "name": "SMTP Account"}}
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate", "documentId": "={{$env.INVOICE_CHASE_SHEET_ID}}", "sheetName": "ChaseLog",
+        "columns": {"mappingMode": "defineBelow", "value": {
+          "chased_at": "={{ $now.toISO() }}",
+          "invoice_id": "={{ $json._invoice.invoiceId }}",
+          "client_name": "={{ $json._invoice.clientName }}",
+          "amount": "={{ $json._invoice.currency + $json._invoice.amount }}",
+          "days_overdue": "={{ $json._invoice.daysOverdue }}",
+          "tone": "={{ $json._invoice.tone }}",
+          "sent": "={{ $json._invoice.sendEmail }}"
+        }}, "options": {}
+      },
+      "id": "l8o2r5u7-0010", "name": "Log Chase",
+      "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.3, "position": [1520, 300],
+      "credentials": {"googleSheetsOAuth2Api": {"id": "google-creds-01", "name": "Google Sheets"}}
+    },
+    {
+      "parameters": {"respondWith": "json", "responseBody": "={{ { status: 'chased', invoice_id: $json._invoice.invoiceId, client: $json._invoice.clientName, amount: $json._invoice.currency + $json._invoice.amount, days_overdue: $json._invoice.daysOverdue, tone: $json._invoice.tone, email_sent: $json._invoice.sendEmail, subject: $json.subject, email_body: $json.email_body, suggested_follow_up: $json.suggested_follow_up } }}"},
+      "id": "l8o2r5u7-0011", "name": "Return Result",
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1, "position": [1740, 220]
+    },
+    {
+      "parameters": {"operation": "read", "documentId": "={{$env.INVOICE_CHASE_SHEET_ID}}", "sheetName": "Invoices", "options": {}},
+      "id": "l8o2r5u7-0012", "name": "Load Overdue Invoices",
+      "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.3, "position": [420, 500],
+      "credentials": {"googleSheetsOAuth2Api": {"id": "google-creds-01", "name": "Google Sheets"}}
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(r => r.json).filter(r => r.invoice_id && r.status !== 'paid');\nconst today = new Date(); today.setHours(0,0,0,0);\nconst overdue = rows.map(r => {\n  const due = new Date(r.due_date);\n  const daysOverdue = Math.floor((today - due) / 86400000);\n  return { ...r, daysOverdue };\n}).filter(r => r.daysOverdue > 0);\nreturn overdue.map(r => ({ json: r }));"
+      },
+      "id": "l8o2r5u7-0013", "name": "Filter Overdue",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [640, 500]
+    },
+    {
+      "parameters": {"batchSize": 1, "options": {}},
+      "id": "l8o2r5u7-0014", "name": "Loop Each Invoice",
+      "type": "n8n-nodes-base.splitInBatches", "typeVersion": 3, "position": [860, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nconst d = r.daysOverdue;\nconst prev = parseInt(r.previous_chase_count) || 0;\nlet tone = r.tone_override || '';\nif (!tone) {\n  if (d <= 7) tone = 'gentle';\n  else if (d <= 21) tone = 'firm';\n  else if (d <= 45) tone = 'urgent';\n  else tone = 'final_notice';\n}\nreturn [{ json: { invoiceId: r.invoice_id, clientName: r.client_name, clientEmail: r.client_email, amount: parseFloat(r.amount), currency: r.currency||'USD', dueDate: r.due_date, daysOverdue: d, yourName: r.your_name||'', yourCompany: r.your_company||'', yourEmail: r.your_email||'', projectDescription: r.project_description||'', paymentInstructions: r.payment_instructions||'', previousChaseCount: prev, tone, includeLateFee: r.include_late_fee==='true'||r.include_late_fee===true, lateFeeAmount: parseFloat(r.late_fee_amount)||null, sendEmail: r.auto_chase==='true'||r.auto_chase===true } }];"
+      },
+      "id": "l8o2r5u7-0015", "name": "Prep Auto Chase",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1080, 500]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {"temperature": 0.5, "maxTokens": 700},
+        "messages": {"values": [
+          {"content": "You write invoice payment chase emails for freelancers and small businesses. Calibrate tone precisely: gentle (friendly reminder), firm (direct, notes delay), urgent (clear consequences), final_notice (last chance, legal/collections). Professional, not apologetic. Always respond in valid JSON only.", "role": "system"},
+          {"content": "Write a payment chase email.\n\nInvoice: {{ $json.invoiceId }}\nClient: {{ $json.clientName }} ({{ $json.clientEmail }})\nAmount: {{ $json.currency }}{{ $json.amount }}\nDue: {{ $json.dueDate }}\nDays overdue: {{ $json.daysOverdue }}\nPrevious chases: {{ $json.previousChaseCount }}\nTone: {{ $json.tone }}\nFrom: {{ $json.yourName }}{{ $json.yourCompany ? ' at ' + $json.yourCompany : '' }}\nProject: {{ $json.projectDescription || 'not specified' }}\nPayment: {{ $json.paymentInstructions || 'not specified' }}\nLate fee: {{ $json.includeLateFee ? $json.currency + ($json.lateFeeAmount||'TBD') : 'not applicable' }}\n\nReturn this JSON:\n{\"subject\":\"...\",\"email_body\":\"...\",\"suggested_follow_up\":\"...\"}", "role": "user"}
+        ]}
+      },
+      "id": "l8o2r5u7-0016", "name": "Claude Auto Chase Writer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic", "typeVersion": 1.3, "position": [1300, 460]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet chase;\ntry { chase = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error' } }]; }\nconst input = $('Prep Auto Chase').first().json;\nchase._invoice = input;\nreturn [{ json: chase }];"
+      },
+      "id": "l8o2r5u7-0017", "name": "Parse Auto Chase",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1520, 460]
+    },
+    {
+      "parameters": {"conditions": {"conditions": [{"id": "cac", "leftValue": "={{ $json._invoice.sendEmail }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true"}}], "combinator": "and"}},
+      "id": "l8o2r5u7-0018", "name": "Auto Send?",
+      "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [1740, 460]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $json._invoice.yourEmail || $env.FROM_EMAIL }}",
+        "toEmail": "={{ $json._invoice.clientEmail }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "text",
+        "message": "={{ $json.email_body }}"
+      },
+      "id": "l8o2r5u7-0019", "name": "Send Auto Chase",
+      "type": "n8n-nodes-base.emailSend", "typeVersion": 2.1, "position": [1960, 420],
+      "credentials": {"smtp": {"id": "smtp-creds-01", "name": "SMTP Account"}}
+    }
+  ],
+  "connections": {
+    "Webhook – Chase Invoice": {"main": [[{"node": "Validate Input", "type": "main", "index": 0}]]},
+    "Validate Input": {"main": [[{"node": "Valid?", "type": "main", "index": 0}]]},
+    "Valid?": {"main": [[{"node": "Claude Chase Writer", "type": "main", "index": 0}], [{"node": "Return Error", "type": "main", "index": 0}]]},
+    "Claude Chase Writer": {"main": [[{"node": "Parse Chase", "type": "main", "index": 0}]]},
+    "Parse Chase": {"main": [[{"node": "Send Email?", "type": "main", "index": 0}]]},
+    "Send Email?": {"main": [[{"node": "Send Chase Email", "type": "main", "index": 0}, {"node": "Log Chase", "type": "main", "index": 0}], [{"node": "Return Result", "type": "main", "index": 0}]]},
+    "Send Chase Email": {"main": [[{"node": "Log Chase", "type": "main", "index": 0}]]},
+    "Log Chase": {"main": [[{"node": "Return Result", "type": "main", "index": 0}]]},
+    "Daily 9am Check": {"main": [[{"node": "Load Overdue Invoices", "type": "main", "index": 0}]]},
+    "Load Overdue Invoices": {"main": [[{"node": "Filter Overdue", "type": "main", "index": 0}]]},
+    "Filter Overdue": {"main": [[{"node": "Loop Each Invoice", "type": "main", "index": 0}]]},
+    "Loop Each Invoice": {"main": [[{"node": "Prep Auto Chase", "type": "main", "index": 0}]]},
+    "Prep Auto Chase": {"main": [[{"node": "Claude Auto Chase Writer", "type": "main", "index": 0}]]},
+    "Claude Auto Chase Writer": {"main": [[{"node": "Parse Auto Chase", "type": "main", "index": 0}]]},
+    "Parse Auto Chase": {"main": [[{"node": "Auto Send?", "type": "main", "index": 0}]]},
+    "Auto Send?": {"main": [[{"node": "Send Auto Chase", "type": "main", "index": 0}], []]}
+  },
+  "pinData": {}, "settings": {"executionOrder": "v1", "saveManualExecutions": true},
+  "staticData": null, "tags": ["invoicing", "freelance", "payments", "automation"], "triggerCount": 2,
+  "updatedAt": "2025-05-19T09:00:00.000Z", "versionId": "v1.0.0"
+}

@@ -1,0 +1,90 @@
+{
+  "name": "Employee Offboarding Checklist Agent",
+  "nodes": [
+    {
+      "parameters": {"httpMethod": "POST", "path": "offboard-employee", "responseMode": "responseNode", "options": {}},
+      "id": "n1q4t7w9-0001", "name": "Webhook",
+      "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [200, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['employee_name', 'last_day', 'role', 'department'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nconst lastDay = new Date(body.last_day);\nif (isNaN(lastDay)) return [{ json: { valid: false, error: 'last_day must be valid (YYYY-MM-DD)' } }];\nconst today = new Date(); today.setHours(0,0,0,0);\nconst daysRemaining = Math.floor((lastDay - today) / 86400000);\nconst depTypes = ['voluntary', 'involuntary', 'retirement', 'contract_end', 'layoff'];\nconst departureType = depTypes.includes(body.departure_type) ? body.departure_type : 'voluntary';\nreturn [{ json: {\n  valid: true,\n  employeeName: body.employee_name.trim(),\n  role: body.role.trim(),\n  department: body.department.trim(),\n  lastDay: body.last_day,\n  daysRemaining: Math.max(0, daysRemaining),\n  departureType,\n  managerId: body.manager_name || '',\n  managerEmail: body.manager_email || '',\n  hrEmail: body.hr_email || '',\n  systems: Array.isArray(body.systems_access) ? body.systems_access : (body.systems_access||'').split(',').map(s=>s.trim()).filter(Boolean),\n  directReports: parseInt(body.direct_reports) || 0,\n  clientFacing: body.client_facing === true || body.client_facing === 'true',\n  companyEquipment: Array.isArray(body.company_equipment) ? body.company_equipment : (body.company_equipment||'').split(',').map(e=>e.trim()).filter(Boolean),\n  replyEmail: body.reply_email || null\n} }];"
+      },
+      "id": "n1q4t7w9-0002", "name": "Validate Input",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [420, 320]
+    },
+    {
+      "parameters": {"conditions": {"conditions": [{"id": "cv", "leftValue": "={{ $json.valid }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true"}}], "combinator": "and"}},
+      "id": "n1q4t7w9-0003", "name": "Valid?",
+      "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [640, 320]
+    },
+    {
+      "parameters": {"respondWith": "json", "responseBody": "={{ { error: $json.error, status: 400 } }}"},
+      "id": "n1q4t7w9-0004", "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1, "position": [860, 480]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {"temperature": 0.35, "maxTokens": 2500},
+        "messages": {"values": [
+          {"content": "You generate employee offboarding checklists for HR and managers. Good offboarding prevents security risks (forgotten access), protects institutional knowledge, handles legal compliance, and creates a positive exit experience. You calibrate to departure type — voluntary departures allow more time for knowledge transfer; involuntary require immediate access revocation. Always respond in valid JSON only.", "role": "system"},
+          {"content": "Generate an offboarding checklist.\n\nEmployee: {{ $json.employeeName }}\nRole: {{ $json.role }}\nDepartment: {{ $json.department }}\nLast day: {{ $json.lastDay }}\nDays remaining: {{ $json.daysRemaining }}\nDeparture type: {{ $json.departureType }}\nManager: {{ $json.managerId || 'not specified' }}\nSystems access: {{ $json.systems.join(', ') || 'not specified' }}\nDirect reports: {{ $json.directReports }}\nClient-facing: {{ $json.clientFacing }}\nEquipment to return: {{ $json.companyEquipment.join(', ') || 'not specified' }}\n\nReturn this JSON:\n{\n  \"offboarding_summary\": \"2-3 sentences: key considerations for this specific offboarding\",\n  \"phases\": [\n    {\n      \"phase\": \"Immediate (day 1 of notice)\",\n      \"items\": [\n        {\n          \"task\": \"specific task\",\n          \"owner\": \"HR | Manager | IT | Employee | Legal | Finance\",\n          \"is_blocker\": false,\n          \"notes\": \"any specific detail\"\n        }\n      ]\n    }\n  ],\n  \"access_revocation_list\": [\"specific systems to revoke — use the systems provided plus infer standard ones for the role\"],\n  \"knowledge_transfer_topics\": [\"specific knowledge areas this employee should document or hand off — based on role\"],\n  \"client_transition_steps\": [\"specific steps for client-facing transitions — null if not client-facing\"],\n  \"legal_compliance_items\": [\"NDA reminders, IP agreements, non-compete considerations, benefits continuation\"],\n  \"equipment_return_list\": [\"items to return with condition documentation notes\"],\n  \"exit_interview_questions\": [\"5-6 questions calibrated to this role and departure type\"],\n  \"manager_talking_points\": [\"what to cover in the offboarding conversation with the employee\"]\n}", "role": "user"}
+        ]}
+      },
+      "id": "n1q4t7w9-0005", "name": "Claude Offboarding Generator",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic", "typeVersion": 1.3, "position": [860, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet checklist;\ntry { checklist = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst input = $('Validate Input').first().json;\nchecklist._meta = { employeeName: input.employeeName, role: input.role, department: input.department, lastDay: input.lastDay, daysRemaining: input.daysRemaining, departureType: input.departureType, managerEmail: input.managerEmail, hrEmail: input.hrEmail, replyEmail: input.replyEmail };\nreturn [{ json: checklist }];"
+      },
+      "id": "n1q4t7w9-0006", "name": "Parse Checklist",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1080, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const c = $input.first().json;\nconst m = c._meta;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nconst ownerColors = {HR:'#7c3aed', Manager:'#2563eb', IT:'#16a34a', Employee:'#d97706', Legal:'#dc2626', Finance:'#0891b2'};\nconst deptColors = {'Immediate (day 1 of notice)':'#dc2626','First 24-48 hours':'#ea580c','Week 1':'#d97706','Week 2 or before last week':'#2563eb','Final week':'#16a34a','Last day':'#6b7280'};\nconst phaseBlocks = (c.phases||[]).map(ph => {\n  const phColor = Object.keys(deptColors).find(k => ph.phase.toLowerCase().includes(k.toLowerCase().slice(0,5))) ? deptColors[Object.keys(deptColors).find(k => ph.phase.toLowerCase().includes(k.toLowerCase().slice(0,5)))] : '#6b7280';\n  const items = (ph.items||[]).map(item => {\n    const oc = ownerColors[item.owner] || '#6b7280';\n    return `<div style=\"display:flex;gap:10px;padding:8px 0;border-bottom:1px solid #f3f4f6;align-items:flex-start\">\n      <input type=\"checkbox\" style=\"margin-top:3px;flex-shrink:0\">\n      <div style=\"flex:1\">\n        <div style=\"display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:2px\">\n          <span style=\"font-size:14px;font-weight:${item.is_blocker?'700':'500'}\">${esc(item.task)}</span>\n          ${item.is_blocker?'<span style=\"background:#fef2f2;color:#dc2626;font-size:10px;font-weight:700;padding:1px 7px;border-radius:8px\">URGENT</span>':''}\n        </div>\n        <div style=\"display:flex;gap:8px\">\n          <span style=\"background:${oc}22;color:${oc};font-size:11px;padding:2px 8px;border-radius:8px;font-weight:600\">${esc(item.owner)}</span>\n        </div>\n        ${item.notes?`<div style=\"font-size:12px;color:#6b7280;margin-top:4px\">${esc(item.notes)}</div>`:''}\n      </div>\n    </div>`;\n  }).join('');\n  return `<div style=\"margin-bottom:20px\"><div style=\"background:#f8faff;border-left:4px solid ${phColor};padding:8px 14px;margin-bottom:10px;border-radius:0 6px 6px 0\"><div style=\"font-size:14px;font-weight:700;color:#1e293b\">${esc(ph.phase)}</div></div>${items}</div>`;\n}).join('');\nconst accessList = (c.access_revocation_list||[]).map(a => `<div style=\"font-size:13px;padding:5px 0;border-bottom:1px solid #fef2f2;color:#7f1d1d\">✗ ${esc(a)}</div>`).join('');\nconst ktList = (c.knowledge_transfer_topics||[]).map(k => `<div style=\"font-size:13px;padding:5px 0;border-bottom:1px solid #f0f9ff;color:#1e40af\">→ ${esc(k)}</div>`).join('');\nconst exitQs = (c.exit_interview_questions||[]).map((q,i) => `<div style=\"font-size:14px;padding:7px 0;border-bottom:1px solid #f3f4f6\">${i+1}. ${esc(q)}</div>`).join('');\nconst legalItems = (c.legal_compliance_items||[]).map(l => `<div style=\"font-size:13px;padding:5px 0;border-bottom:1px solid #f5f3ff;color:#6d28d9\">⚖ ${esc(l)}</div>`).join('');\nconst dtColors = {voluntary:'#16a34a', involuntary:'#dc2626', retirement:'#2563eb', contract_end:'#d97706', layoff:'#ea580c'};\nconst dtColor = dtColors[m.departureType] || '#6b7280';\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f5f5f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111\">\n<div style=\"max-width:720px;margin:0 auto\">\n  <div style=\"background:#1e293b;color:#fff;padding:20px 28px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;color:#64748b;margin-bottom:4px\">Employee Offboarding · ${esc(m.departureType.replace(/_/g,' '))}</div>\n    <div style=\"font-size:19px;font-weight:700\">${esc(m.employeeName)}</div>\n    <div style=\"font-size:13px;color:#94a3b8;margin-top:3px\">${esc(m.role)} · ${esc(m.department)} · Last day: ${esc(m.lastDay)} (${m.daysRemaining} days)</div>\n  </div>\n  <div style=\"background:#fff;padding:14px 28px;border:1px solid #e5e7eb;border-top:none;display:flex;gap:12px;align-items:center\">\n    <span style=\"background:${dtColor};color:#fff;font-size:12px;font-weight:700;padding:3px 12px;border-radius:10px\">${esc(m.departureType.replace(/_/g,' ').toUpperCase())}</span>\n    <p style=\"font-size:14px;color:#374151;margin:0;line-height:1.6\">${esc(c.offboarding_summary)}</p>\n  </div>\n  <div style=\"background:#fff;padding:18px 28px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\">${phaseBlocks}</div>\n  ${accessList?`<div style=\"background:#fef2f2;padding:14px 28px;border:1px solid #fecaca\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#b91c1c;margin-bottom:8px\">Access to revoke</div>${accessList}</div>`:''}\n  ${ktList?`<div style=\"background:#eff6ff;padding:14px 28px;border:1px solid #bfdbfe\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#1d4ed8;margin-bottom:8px\">Knowledge transfer topics</div>${ktList}</div>`:''}\n  ${legalItems?`<div style=\"background:#f5f3ff;padding:14px 28px;border:1px solid #ddd6fe\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#6d28d9;margin-bottom:8px\">Legal & compliance</div>${legalItems}</div>`:''}\n  ${exitQs?`<div style=\"background:#fff;padding:14px 28px;border:1px solid #e5e7eb;border-top:3px solid #f5f5f0\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:8px\">Exit interview questions</div>${exitQs}</div>`:''}\n  <div style=\"background:#1e293b;color:#475569;font-size:11px;padding:10px 28px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">Employee Offboarding · ${esc(m.employeeName)} · Last day ${esc(m.lastDay)}</div>\n</div></body></html>`;\nreturn [{ json: { html, replyEmail: m.replyEmail, managerEmail: m.managerEmail, hrEmail: m.hrEmail, employeeName: m.employeeName, lastDay: m.lastDay, checklist: c } }];"
+      },
+      "id": "n1q4t7w9-0007", "name": "Build Checklist",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1300, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const emails = [$json.managerEmail, $json.hrEmail, $json.replyEmail].filter(Boolean);\nconst unique = [...new Set(emails)];\nreturn [{ json: { ...$json, allRecipients: unique } }];"
+      },
+      "id": "n1q4t7w9-0008", "name": "Collect Recipients",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1520, 240]
+    },
+    {
+      "parameters": {"conditions": {"conditions": [{"id": "ce", "leftValue": "={{ $json.allRecipients.length > 0 }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true"}}], "combinator": "and"}},
+      "id": "n1q4t7w9-0009", "name": "Has Recipients?",
+      "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [1740, 240]
+    },
+    {
+      "parameters": {"fromEmail": "={{$env.FROM_EMAIL}}", "toEmail": "={{ $json.allRecipients.join(',') }}", "subject": "Offboarding checklist: {{ $json.employeeName }} · Last day {{ $json.lastDay }}", "emailType": "html", "message": "={{$json.html}}"},
+      "id": "n1q4t7w9-0010", "name": "Email Checklist",
+      "type": "n8n-nodes-base.emailSend", "typeVersion": 2.1, "position": [1960, 180],
+      "credentials": {"smtp": {"id": "smtp-creds-01", "name": "SMTP Account"}}
+    },
+    {
+      "parameters": {"respondWith": "json", "responseBody": "={{ { status: 'generated', employee: $json.employeeName, last_day: $json.lastDay, emailed_to: $json.allRecipients, checklist: $json.checklist } }}"},
+      "id": "n1q4t7w9-0011", "name": "Return Checklist",
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1, "position": [2180, 240]
+    }
+  ],
+  "connections": {
+    "Webhook": {"main": [[{"node": "Validate Input", "type": "main", "index": 0}]]},
+    "Validate Input": {"main": [[{"node": "Valid?", "type": "main", "index": 0}]]},
+    "Valid?": {"main": [[{"node": "Claude Offboarding Generator", "type": "main", "index": 0}], [{"node": "Return Error", "type": "main", "index": 0}]]},
+    "Claude Offboarding Generator": {"main": [[{"node": "Parse Checklist", "type": "main", "index": 0}]]},
+    "Parse Checklist": {"main": [[{"node": "Build Checklist", "type": "main", "index": 0}]]},
+    "Build Checklist": {"main": [[{"node": "Collect Recipients", "type": "main", "index": 0}]]},
+    "Collect Recipients": {"main": [[{"node": "Has Recipients?", "type": "main", "index": 0}]]},
+    "Has Recipients?": {"main": [[{"node": "Email Checklist", "type": "main", "index": 0}], [{"node": "Return Checklist", "type": "main", "index": 0}]]},
+    "Email Checklist": {"main": [[{"node": "Return Checklist", "type": "main", "index": 0}]]}
+  },
+  "pinData": {}, "settings": {"executionOrder": "v1", "saveManualExecutions": true},
+  "staticData": null, "tags": ["hr", "offboarding", "compliance", "operations"], "triggerCount": 0,
+  "updatedAt": "2025-05-19T11:00:00.000Z", "versionId": "v1.0.0"
+}
