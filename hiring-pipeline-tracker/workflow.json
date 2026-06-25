@@ -1,0 +1,165 @@
+{
+  "name": "Hiring Pipeline Tracker Agent",
+  "nodes": [
+    {
+      "parameters": {"httpMethod": "POST", "path": "log-candidate", "responseMode": "responseNode", "options": {}},
+      "id": "p3s6v9y2-0001", "name": "Webhook – Log Candidate",
+      "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [200, 260]
+    },
+    {
+      "parameters": {"rule": {"interval": [{"field": "weeks", "weeksInterval": 1, "triggerAtDay": [1], "triggerAtHour": 8, "triggerAtMinute": 30}]}},
+      "id": "p3s6v9y2-0002", "name": "Weekly Pipeline Report",
+      "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.1, "position": [200, 520]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['candidate_name', 'role', 'stage'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nconst stages = ['applied','phone_screen','technical','take_home','onsite','offer','hired','rejected','withdrawn'];\nconst stage = stages.includes(body.stage) ? body.stage : 'applied';\nreturn [{ json: {\n  valid: true,\n  candidateId: body.candidate_id || `C-${Date.now()}`,\n  candidateName: body.candidate_name.trim(),\n  candidateEmail: body.candidate_email || '',\n  role: body.role.trim(),\n  department: body.department || '',\n  stage,\n  previousStage: body.previous_stage || '',\n  interviewerNotes: (body.interviewer_notes || '').slice(0, 1000),\n  rating: body.rating ? parseFloat(body.rating) : null,\n  source: body.source || '',\n  actionRequired: body.action_required || '',\n  nextStepDate: body.next_step_date || '',\n  hiringManagerEmail: body.hiring_manager_email || '',\n  replyEmail: body.reply_email || null,\n  loggedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "p3s6v9y2-0003", "name": "Validate Log",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [420, 260]
+    },
+    {
+      "parameters": {"conditions": {"conditions": [{"id": "cv", "leftValue": "={{ $json.valid }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true"}}], "combinator": "and"}},
+      "id": "p3s6v9y2-0004", "name": "Valid?",
+      "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [640, 260]
+    },
+    {
+      "parameters": {"respondWith": "json", "responseBody": "={{ { error: $json.error, status: 400 } }}"},
+      "id": "p3s6v9y2-0005", "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1, "position": [860, 400]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate", "documentId": "={{$env.HIRING_SHEET_ID}}", "sheetName": "Pipeline",
+        "columns": {"mappingMode": "defineBelow", "value": {
+          "candidate_id": "={{ $json.candidateId }}",
+          "logged_at": "={{ $json.loggedAt }}",
+          "candidate_name": "={{ $json.candidateName }}",
+          "candidate_email": "={{ $json.candidateEmail }}",
+          "role": "={{ $json.role }}",
+          "department": "={{ $json.department }}",
+          "stage": "={{ $json.stage }}",
+          "previous_stage": "={{ $json.previousStage }}",
+          "rating": "={{ $json.rating }}",
+          "source": "={{ $json.source }}",
+          "action_required": "={{ $json.actionRequired }}",
+          "next_step_date": "={{ $json.nextStepDate }}",
+          "notes_summary": "={{ $json.interviewerNotes.slice(0,200) }}"
+        }}, "options": {}
+      },
+      "id": "p3s6v9y2-0006", "name": "Log to Sheet",
+      "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.3, "position": [860, 220],
+      "credentials": {"googleSheetsOAuth2Api": {"id": "google-creds-01", "name": "Google Sheets"}}
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $('Validate Log').first().json;\nconst needsNote = input.interviewerNotes && input.interviewerNotes.length > 50;\nconst stageAdvances = input.previousStage && input.stage !== input.previousStage;\nreturn [{ json: { input, needsNote, stageAdvances } }];"
+      },
+      "id": "p3s6v9y2-0007", "name": "Check Note Needed",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1080, 220]
+    },
+    {
+      "parameters": {"conditions": {"conditions": [{"id": "cnn", "leftValue": "={{ $json.needsNote }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true"}}], "combinator": "and"}},
+      "id": "p3s6v9y2-0008", "name": "Has Notes?",
+      "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [1300, 220]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {"temperature": 0.3, "maxTokens": 500},
+        "messages": {"values": [
+          {"content": "You summarize interviewer notes for a hiring pipeline. Extract the key signal: strengths observed, concerns raised, recommended next step, and overall assessment. Be specific and factual. Under 120 words. Always respond in valid JSON only.", "role": "system"},
+          {"content": "Summarize these interviewer notes.\n\nCandidate: {{ $json.input.candidateName }}\nRole: {{ $json.input.role }}\nStage: {{ $json.input.stage.replace(/_/g,' ') }}\nRating: {{ $json.input.rating || 'not given' }}/5\n\nNotes:\n{{ $json.input.interviewerNotes }}\n\nReturn this JSON:\n{\n  \"strengths\": [\"observed strength\"],\n  \"concerns\": [\"concern or gap\"],\n  \"recommended_next_step\": \"advance | hold | reject | more info needed\",\n  \"summary\": \"2-3 sentence summary for the hiring manager\"\n}", "role": "user"}
+        ]}
+      },
+      "id": "p3s6v9y2-0009", "name": "Claude Note Summarizer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic", "typeVersion": 1.3, "position": [1520, 180]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet summary;\ntry { summary = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { summary = { summary: raw.slice(0, 300) }; }\nconst input = $('Check Note Needed').first().json.input;\nreturn [{ json: { noteSummary: summary, input } }];"
+      },
+      "id": "p3s6v9y2-0010", "name": "Parse Note",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1740, 180]
+    },
+    {
+      "parameters": {"conditions": {"conditions": [{"id": "chm", "leftValue": "={{ $json.input.hiringManagerEmail }}", "rightValue": "", "operator": {"type": "string", "operation": "notEmpty"}}], "combinator": "and"}},
+      "id": "p3s6v9y2-0011", "name": "Notify Manager?",
+      "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [1960, 180]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.FROM_EMAIL}}", "toEmail": "={{ $json.input.hiringManagerEmail }}",
+        "subject": "Candidate update: {{ $json.input.candidateName }} → {{ $json.input.stage.replace(/_/g,' ') }}",
+        "emailType": "text",
+        "message": "={{ $json.input.candidateName }} — {{ $json.input.role }}\\nStage: {{ $json.input.stage.replace(/_/g,' ') }}\\nRating: {{ $json.input.rating || 'not given' }}/5\\n\\n{{ $json.noteSummary.summary }}\\n\\nStrengths: {{ ($json.noteSummary.strengths||[]).join(', ') }}\\nConcerns: {{ ($json.noteSummary.concerns||[]).join(', ') }}\\n\\nRecommendation: {{ $json.noteSummary.recommended_next_step }}\\nNext step date: {{ $json.input.nextStepDate || 'not set' }}"
+      },
+      "id": "p3s6v9y2-0012", "name": "Email Manager Update",
+      "type": "n8n-nodes-base.emailSend", "typeVersion": 2.1, "position": [2180, 140],
+      "credentials": {"smtp": {"id": "smtp-creds-01", "name": "SMTP Account"}}
+    },
+    {
+      "parameters": {"respondWith": "json", "responseBody": "={{ { status: 'logged', candidate_id: $json.input.candidateId, name: $json.input.candidateName, stage: $json.input.stage, note_summary: $json.noteSummary } }}"},
+      "id": "p3s6v9y2-0013", "name": "Return Log Result",
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1, "position": [2180, 280]
+    },
+    {
+      "parameters": {"operation": "read", "documentId": "={{$env.HIRING_SHEET_ID}}", "sheetName": "Pipeline", "options": {}},
+      "id": "p3s6v9y2-0014", "name": "Load Pipeline",
+      "type": "n8n-nodes-base.googleSheets", "typeVersion": 4.3, "position": [420, 520],
+      "credentials": {"googleSheetsOAuth2Api": {"id": "google-creds-01", "name": "Google Sheets"}}
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(r => r.json).filter(r => r.candidate_name && r.stage && !['hired','rejected','withdrawn'].includes(r.stage));\nconst byRole = {};\nrows.forEach(r => { if (!byRole[r.role]) byRole[r.role] = []; byRole[r.role].push(r); });\nconst stageOrder = ['applied','phone_screen','technical','take_home','onsite','offer'];\nconst byStage = {};\nrows.forEach(r => { if (!byStage[r.stage]) byStage[r.stage] = 0; byStage[r.stage]++; });\nconst actionNeeded = rows.filter(r => r.action_required || (r.next_step_date && new Date(r.next_step_date) <= new Date()));\nreturn [{ json: { activeCandidates: rows.length, byRole, byStage, actionNeeded, generatedAt: new Date().toISOString() } }];"
+      },
+      "id": "p3s6v9y2-0015", "name": "Aggregate Pipeline",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [640, 520]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {"temperature": 0.4, "maxTokens": 500},
+        "messages": {"values": [
+          {"content": "You write weekly hiring pipeline summaries for recruiting and HR leads. Identify pipeline health, stage distribution, and what needs immediate attention. Under 150 words.", "role": "system"},
+          {"content": "Summarize this hiring pipeline.\n\nActive candidates: {{ $json.activeCandidates }}\nBy stage: {{ JSON.stringify($json.byStage) }}\nRoles being filled: {{ Object.keys($json.byRole).join(', ') }}\nAction required or overdue: {{ $json.actionNeeded.length }} candidates\n\nAction items: {{ $json.actionNeeded.map(c => c.candidate_name + ' (' + c.role + '): ' + (c.action_required || 'next step overdue')).join('; ') || 'none' }}\n\nGive: pipeline health assessment, what's most urgent this week, and any bottleneck.", "role": "user"}
+        ]}
+      },
+      "id": "p3s6v9y2-0016", "name": "Claude Pipeline Analyst",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic", "typeVersion": 1.3, "position": [860, 520]
+    },
+    {
+      "parameters": {
+        "jsCode": "const note = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nconst d = $('Aggregate Pipeline').first().json;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nconst stageLabels = {applied:'Applied',phone_screen:'Phone Screen',technical:'Technical',take_home:'Take Home',onsite:'Onsite',offer:'Offer'};\nconst stageBars = Object.entries(d.byStage).sort((a,b)=>(Object.keys(stageLabels).indexOf(a[0]))-(Object.keys(stageLabels).indexOf(b[0]))).map(([stage,count]) => `<div style=\"display:flex;align-items:center;gap:10px;padding:6px 0\"><div style=\"font-size:13px;width:110px;color:#374151\">${esc(stageLabels[stage]||stage)}</div><div style=\"background:#2563eb22;border-radius:4px;height:20px;flex:1\"><div style=\"background:#2563eb;height:20px;border-radius:4px;width:${Math.min(100,count*20)}%;display:flex;align-items:center;padding-left:6px\"><span style=\"font-size:11px;font-weight:700;color:#fff\">${count}</span></div></div></div>`).join('');\nconst roleBlocks = Object.entries(d.byRole).map(([role, candidates]) => `<div style=\"padding:8px 0;border-bottom:1px solid #f3f4f6\"><div style=\"font-size:14px;font-weight:600;margin-bottom:4px\">${esc(role)} (${candidates.length})</div>${candidates.map(c=>`<div style=\"font-size:12px;color:#6b7280;padding:2px 0\">${esc(c.candidate_name)} — ${esc(c.stage.replace(/_/g,' '))}${c.rating?' · '+c.rating+'/5':''}</div>`).join('')}</div>`).join('');\nconst actionRows = d.actionNeeded.slice(0,8).map(c => `<div style=\"font-size:13px;padding:6px 0;border-bottom:1px solid #fef2f2;color:#7f1d1d\">⚡ ${esc(c.candidate_name)} (${esc(c.role)}): ${esc(c.action_required||'next step overdue')}</div>`).join('');\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body style=\"margin:0;padding:16px;background:#f9fafb;font-family:sans-serif\"><div style=\"max-width:660px;margin:0 auto\"><div style=\"background:#1e293b;color:#fff;padding:18px 26px;border-radius:10px 10px 0 0\"><div style=\"font-size:11px;text-transform:uppercase;color:#64748b\">Weekly Hiring Pipeline · ${esc(d.generatedAt.split('T')[0])}</div><div style=\"font-size:18px;font-weight:700\">${d.activeCandidates} active candidates · ${Object.keys(d.byRole).length} open roles</div></div><div style=\"background:#fff;padding:16px 26px;border:1px solid #e5e7eb;border-top:none\"><p style=\"font-size:14px;line-height:1.7;color:#374151;margin:0\">${esc(note)}</p></div><div style=\"background:#fff;padding:16px 26px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:8px\">Stage distribution</div>${stageBars}</div>${actionRows?`<div style=\"background:#fef2f2;padding:14px 26px;border:1px solid #fecaca\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#b91c1c;margin-bottom:7px\">Action needed</div>${actionRows}</div>`:''}<div style=\"background:#fff;padding:14px 26px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:8px\">By role</div>${roleBlocks}</div></div></body></html>`;\nreturn [{ json: { html, activeCandidates: d.activeCandidates } }];"
+      },
+      "id": "p3s6v9y2-0017", "name": "Build Pipeline Report",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1080, 520]
+    },
+    {
+      "parameters": {"fromEmail": "={{$env.FROM_EMAIL}}", "toEmail": "={{$env.HIRING_LEAD_EMAIL}}", "subject": "Weekly hiring pipeline — {{ $json.activeCandidates }} active candidates", "emailType": "html", "message": "={{$json.html}}"},
+      "id": "p3s6v9y2-0018", "name": "Send Pipeline Report",
+      "type": "n8n-nodes-base.emailSend", "typeVersion": 2.1, "position": [1300, 520],
+      "credentials": {"smtp": {"id": "smtp-creds-01", "name": "SMTP Account"}}
+    }
+  ],
+  "connections": {
+    "Webhook – Log Candidate": {"main": [[{"node": "Validate Log", "type": "main", "index": 0}]]},
+    "Validate Log": {"main": [[{"node": "Valid?", "type": "main", "index": 0}]]},
+    "Valid?": {"main": [[{"node": "Log to Sheet", "type": "main", "index": 0}], [{"node": "Return Error", "type": "main", "index": 0}]]},
+    "Log to Sheet": {"main": [[{"node": "Check Note Needed", "type": "main", "index": 0}]]},
+    "Check Note Needed": {"main": [[{"node": "Has Notes?", "type": "main", "index": 0}]]},
+    "Has Notes?": {"main": [[{"node": "Claude Note Summarizer", "type": "main", "index": 0}], [{"node": "Return Log Result", "type": "main", "index": 0}]]},
+    "Claude Note Summarizer": {"main": [[{"node": "Parse Note", "type": "main", "index": 0}]]},
+    "Parse Note": {"main": [[{"node": "Notify Manager?", "type": "main", "index": 0}]]},
+    "Notify Manager?": {"main": [[{"node": "Email Manager Update", "type": "main", "index": 0}], [{"node": "Return Log Result", "type": "main", "index": 0}]]},
+    "Email Manager Update": {"main": [[{"node": "Return Log Result", "type": "main", "index": 0}]]},
+    "Weekly Pipeline Report": {"main": [[{"node": "Load Pipeline", "type": "main", "index": 0}]]},
+    "Load Pipeline": {"main": [[{"node": "Aggregate Pipeline", "type": "main", "index": 0}]]},
+    "Aggregate Pipeline": {"main": [[{"node": "Claude Pipeline Analyst", "type": "main", "index": 0}]]},
+    "Claude Pipeline Analyst": {"main": [[{"node": "Build Pipeline Report", "type": "main", "index": 0}]]},
+    "Build Pipeline Report": {"main": [[{"node": "Send Pipeline Report", "type": "main", "index": 0}]]}
+  },
+  "pinData": {}, "settings": {"executionOrder": "v1", "saveManualExecutions": true},
+  "staticData": null, "tags": ["hr", "recruiting", "hiring", "pipeline"], "triggerCount": 2,
+  "updatedAt": "2025-05-20T10:00:00.000Z", "versionId": "v1.0.0"
+}

@@ -1,0 +1,82 @@
+{
+  "name": "Podcast Episode Summarizer Agent",
+  "nodes": [
+    {
+      "parameters": {"httpMethod": "POST", "path": "summarize-podcast", "responseMode": "responseNode", "options": {}},
+      "id": "o2r5u8x1-0001", "name": "Webhook",
+      "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [200, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['episode_title', 'transcript_or_notes'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nif (body.transcript_or_notes.trim().length < 100) return [{ json: { valid: false, error: 'transcript_or_notes too short' } }];\nconst outputFormats = ['show_notes', 'newsletter_feature', 'social_pack', 'all'];\nconst outputFormat = outputFormats.includes(body.output_format) ? body.output_format : 'all';\nreturn [{ json: {\n  valid: true,\n  podcastName: body.podcast_name || '',\n  episodeTitle: body.episode_title.trim(),\n  episodeNumber: body.episode_number || '',\n  guestName: body.guest_name || '',\n  guestTitle: body.guest_title || '',\n  hostName: body.host_name || '',\n  transcriptOrNotes: body.transcript_or_notes.trim().slice(0, 12000),\n  outputFormat,\n  targetAudience: body.target_audience || '',\n  tone: body.tone || 'conversational',\n  replyEmail: body.reply_email || null,\n  requestedAt: new Date().toISOString()\n} }];"
+      },
+      "id": "o2r5u8x1-0002", "name": "Validate Input",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [420, 320]
+    },
+    {
+      "parameters": {"conditions": {"conditions": [{"id": "cv", "leftValue": "={{ $json.valid }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true"}}], "combinator": "and"}},
+      "id": "o2r5u8x1-0003", "name": "Valid?",
+      "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [640, 320]
+    },
+    {
+      "parameters": {"respondWith": "json", "responseBody": "={{ { error: $json.error, status: 400 } }}"},
+      "id": "o2r5u8x1-0004", "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1, "position": [860, 480]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {"temperature": 0.55, "maxTokens": 3000},
+        "messages": {"values": [
+          {"content": "You write podcast content assets from transcripts or notes. You capture the actual substance — the specific insights, stories, and frameworks discussed — not generic summaries that could describe any episode. Good podcast show notes make a listener decide to tune in; good social posts make someone share even if they haven't listened yet. Always respond in valid JSON only.", "role": "system"},
+          {"content": "Process this podcast episode and generate content assets.\n\nPodcast: {{ $json.podcastName || 'not specified' }}\nEpisode: {{ $json.episodeNumber ? '#' + $json.episodeNumber + ' — ' : '' }}{{ $json.episodeTitle }}\nGuest: {{ $json.guestName ? $json.guestName + (($json.guestTitle) ? ', ' + $json.guestTitle : '') : 'no guest (solo episode)' }}\nHost: {{ $json.hostName || 'not specified' }}\nAudience: {{ $json.targetAudience || 'general' }}\nTone: {{ $json.tone }}\nOutput format: {{ $json.outputFormat }}\n\nTranscript / notes:\n{{ $json.transcriptOrNotes }}\n\nReturn this JSON:\n{\n  \"episode_summary\": \"3-4 sentences capturing what was covered and the key takeaway — specific to this episode\",\n  \"key_insights\": [\n    {\"insight\": \"specific insight or idea from the episode\", \"context\": \"brief context or quote paraphrase that supports it\"}\n  ],\n  \"timestamps_suggested\": [\n    {\"topic\": \"topic or segment name\", \"description\": \"what's covered in this segment\"}\n  ],\n  \"show_notes\": {\n    \"intro_paragraph\": \"2-3 sentences that sell the episode — makes someone want to listen\",\n    \"what_you_ll_learn\": [\"specific learning or takeaway — bullet point style\"],\n    \"episode_highlights\": [\"3-5 notable moments, quotes, or topics from the episode\"],\n    \"resources_mentioned\": [\"any books, tools, people, or links mentioned in the transcript\"],\n    \"about_the_guest\": \"1-2 sentences about the guest if there is one, else null\"\n  },\n  \"newsletter_feature\": {\n    \"subject_line\": \"email subject if featuring this episode in a newsletter\",\n    \"body\": \"150-200 word feature — conversational, gives enough value that the reader feels they got something even without listening, but makes them want to hear more\"\n  },\n  \"social_pack\": {\n    \"twitter_thread_opener\": \"opening tweet for a thread about this episode — hook that earns the next click\",\n    \"linkedin_post\": \"200-250 word LinkedIn post — insight-led, ends with a question or reflection\",\n    \"instagram_caption\": \"caption for a quote card or audiogram — under 150 words, hashtag suggestions at end\",\n    \"pull_quote\": \"the single most shareable quote or insight from the episode — verbatim if transcript, paraphrased if notes\"\n  }\n}", "role": "user"}
+        ]}
+      },
+      "id": "o2r5u8x1-0005", "name": "Claude Episode Processor",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic", "typeVersion": 1.3, "position": [860, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet assets;\ntry { assets = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst input = $('Validate Input').first().json;\nassets._meta = { podcastName: input.podcastName, episodeTitle: input.episodeTitle, episodeNumber: input.episodeNumber, guestName: input.guestName, replyEmail: input.replyEmail, outputFormat: input.outputFormat };\nreturn [{ json: assets }];"
+      },
+      "id": "o2r5u8x1-0006", "name": "Parse Assets",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1080, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const a = $input.first().json;\nconst m = a._meta;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nconst insights = (a.key_insights||[]).map((ins,i) => `<div style=\"border-left:3px solid #2563eb;padding:10px 14px;background:#f8faff;border-radius:0 6px 6px 0;margin-bottom:10px\"><div style=\"font-size:14px;font-weight:600;color:#1e3a8a;margin-bottom:3px\">${esc(ins.insight)}</div><div style=\"font-size:13px;color:#6b7280\">${esc(ins.context)}</div></div>`).join('');\nconst learnItems = (a.show_notes?.what_you_ll_learn||[]).map(l => `<li style=\"font-size:14px;margin-bottom:6px;line-height:1.5\">${esc(l)}</li>`).join('');\nconst highlights = (a.show_notes?.episode_highlights||[]).map(h => `<div style=\"font-size:14px;padding:6px 0;border-bottom:1px solid #f3f4f6\">✦ ${esc(h)}</div>`).join('');\nconst resources = (a.show_notes?.resources_mentioned||[]).map(r => `<div style=\"font-size:13px;padding:4px 0;color:#2563eb\">→ ${esc(r)}</div>`).join('');\nconst sn = a.show_notes || {};\nconst nl = a.newsletter_feature || {};\nconst sp = a.social_pack || {};\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f9fafb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111\">\n<div style=\"max-width:700px;margin:0 auto\">\n  <div style=\"background:#111827;color:#fff;padding:20px 28px;border-radius:10px 10px 0 0\">\n    <div style=\"font-size:11px;text-transform:uppercase;color:#6b7280;margin-bottom:4px\">${esc(m.podcastName||'Podcast')}${m.episodeNumber?' · Ep '+esc(m.episodeNumber):''}</div>\n    <div style=\"font-size:18px;font-weight:700;line-height:1.3\">${esc(m.episodeTitle)}</div>\n    ${m.guestName?`<div style=\"font-size:13px;color:#9ca3af;margin-top:3px\">Guest: ${esc(m.guestName)}</div>`:''}\n  </div>\n  <div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:none\">\n    <p style=\"font-size:15px;line-height:1.75;color:#374151;margin:0\">${esc(a.episode_summary)}</p>\n  </div>\n  ${insights?`<div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:10px\">Key insights</div>${insights}</div>`:''}\n  <div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:6px\">Show notes</div>\n    <p style=\"font-size:14px;line-height:1.7;color:#374151;margin:0 0 12px\">${esc(sn.intro_paragraph)}</p>\n    ${learnItems?`<div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:6px\">What you'll learn</div><ul style=\"padding-left:18px;margin:0 0 12px\">${learnItems}</ul>`:''}\n    ${highlights?`<div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:6px\">Highlights</div>${highlights}`:''}\n    ${resources?`<div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-top:12px;margin-bottom:6px\">Resources mentioned</div>${resources}`:''}\n  </div>\n  ${nl.body?`<div style=\"background:#eff6ff;padding:16px 28px;border:1px solid #bfdbfe\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#1d4ed8;margin-bottom:4px\">Newsletter feature</div>\n    <div style=\"font-size:13px;color:#1e40af;margin-bottom:8px\"><strong>Subject:</strong> ${esc(nl.subject_line)}</div>\n    <div style=\"font-size:14px;line-height:1.75;color:#374151;white-space:pre-line\">${esc(nl.body)}</div>\n  </div>`:''}\n  ${sp.pull_quote?`<div style=\"background:#fafaf9;padding:16px 28px;border:1px solid #e5e7eb;border-left:4px solid #d97706;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:16px;font-style:italic;color:#92400e;line-height:1.65\">"${esc(sp.pull_quote)}"</div>\n  </div>`:''}\n  ${sp.linkedin_post?`<div style=\"background:#fff;padding:16px 28px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#0077b5;margin-bottom:8px\">LinkedIn post</div>\n    <div style=\"font-size:14px;line-height:1.75;color:#374151;white-space:pre-line\">${esc(sp.linkedin_post)}</div>\n  </div>`:''}\n  ${sp.twitter_thread_opener?`<div style=\"background:#fff;padding:14px 28px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#1da1f2;margin-bottom:6px\">Twitter thread opener</div>\n    <div style=\"font-size:14px;color:#374151;background:#f9fafb;padding:12px;border-radius:6px\">${esc(sp.twitter_thread_opener)}</div>\n  </div>`:''}\n  <div style=\"background:#111827;color:#475569;font-size:11px;padding:10px 28px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">Podcast Summarizer · ${esc(m.episodeTitle)}</div>\n</div></body></html>`;\nreturn [{ json: { html, replyEmail: m.replyEmail, episodeTitle: m.episodeTitle, assets: a } }];"
+      },
+      "id": "o2r5u8x1-0007", "name": "Build Output",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1300, 240]
+    },
+    {
+      "parameters": {"conditions": {"conditions": [{"id": "ce", "leftValue": "={{ $json.replyEmail }}", "rightValue": "", "operator": {"type": "string", "operation": "notEmpty"}}], "combinator": "and"}},
+      "id": "o2r5u8x1-0008", "name": "Has Email?",
+      "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [1520, 240]
+    },
+    {
+      "parameters": {"fromEmail": "={{$env.FROM_EMAIL}}", "toEmail": "={{$json.replyEmail}}", "subject": "Podcast assets: {{ $json.episodeTitle }}", "emailType": "html", "message": "={{$json.html}}"},
+      "id": "o2r5u8x1-0009", "name": "Email Assets",
+      "type": "n8n-nodes-base.emailSend", "typeVersion": 2.1, "position": [1740, 180],
+      "credentials": {"smtp": {"id": "smtp-creds-01", "name": "SMTP Account"}}
+    },
+    {
+      "parameters": {"respondWith": "json", "responseBody": "={{ { status: 'processed', episode: $json.episodeTitle, emailed: $json.replyEmail ? true : false, assets: $json.assets } }}"},
+      "id": "o2r5u8x1-0010", "name": "Return Assets",
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1, "position": [1960, 240]
+    }
+  ],
+  "connections": {
+    "Webhook": {"main": [[{"node": "Validate Input", "type": "main", "index": 0}]]},
+    "Validate Input": {"main": [[{"node": "Valid?", "type": "main", "index": 0}]]},
+    "Valid?": {"main": [[{"node": "Claude Episode Processor", "type": "main", "index": 0}], [{"node": "Return Error", "type": "main", "index": 0}]]},
+    "Claude Episode Processor": {"main": [[{"node": "Parse Assets", "type": "main", "index": 0}]]},
+    "Parse Assets": {"main": [[{"node": "Build Output", "type": "main", "index": 0}]]},
+    "Build Output": {"main": [[{"node": "Has Email?", "type": "main", "index": 0}]]},
+    "Has Email?": {"main": [[{"node": "Email Assets", "type": "main", "index": 0}], [{"node": "Return Assets", "type": "main", "index": 0}]]},
+    "Email Assets": {"main": [[{"node": "Return Assets", "type": "main", "index": 0}]]}
+  },
+  "pinData": {}, "settings": {"executionOrder": "v1", "saveManualExecutions": true},
+  "staticData": null, "tags": ["podcast", "content", "media", "show-notes"], "triggerCount": 0,
+  "updatedAt": "2025-05-20T09:00:00.000Z", "versionId": "v1.0.0"
+}
