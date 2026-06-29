@@ -1,0 +1,90 @@
+{
+  "name": "Sales Call Debrief Agent",
+  "nodes": [
+    {
+      "parameters": {"httpMethod": "POST", "path": "sales-debrief", "responseMode": "responseNode", "options": {}},
+      "id": "r5u8x2a4-0001", "name": "Webhook",
+      "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [200, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst required = ['prospect_company', 'call_notes', 'rep_name'];\nconst missing = required.filter(f => !body[f]);\nif (missing.length) return [{ json: { valid: false, error: `Missing: ${missing.join(', ')}` } }];\nif (body.call_notes.trim().length < 50) return [{ json: { valid: false, error: 'call_notes too short' } }];\nconst stages = ['discovery', 'demo', 'technical_evaluation', 'proposal', 'negotiation', 'closing', 'renewal'];\nconst stage = stages.includes(body.deal_stage) ? body.deal_stage : 'discovery';\nreturn [{ json: {\n  valid: true,\n  prospectCompany: body.prospect_company.trim(),\n  prospectContact: body.prospect_contact || '',\n  prospectTitle: body.prospect_title || '',\n  repName: body.rep_name.trim(),\n  repEmail: body.rep_email || '',\n  dealStage: stage,\n  callNotes: body.call_notes.trim().slice(0, 5000),\n  dealValue: parseFloat(body.deal_value) || null,\n  currency: body.currency || 'USD',\n  productOffered: body.product_offered || '',\n  competitorsInvolved: Array.isArray(body.competitors_involved) ? body.competitors_involved : (body.competitors_involved||'').split(',').map(c=>c.trim()).filter(Boolean),\n  callDate: body.call_date || new Date().toISOString().split('T')[0],\n  managerEmail: body.manager_email || '',\n  replyEmail: body.reply_email || null\n} }];"
+      },
+      "id": "r5u8x2a4-0002", "name": "Validate Input",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [420, 320]
+    },
+    {
+      "parameters": {"conditions": {"conditions": [{"id": "cv", "leftValue": "={{ $json.valid }}", "rightValue": true, "operator": {"type": "boolean", "index": 0}}], "combinator": "and"}},
+      "id": "r5u8x2a4-0003", "name": "Valid?",
+      "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [640, 320]
+    },
+    {
+      "parameters": {"respondWith": "json", "responseBody": "={{ { error: $json.error, status: 400 } }}"},
+      "id": "r5u8x2a4-0004", "name": "Return Error",
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1, "position": [860, 480]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {"temperature": 0.4, "maxTokens": 2000},
+        "messages": {"values": [
+          {"content": "You debrief sales calls for B2B sales teams. You extract what actually matters: the prospect's real buying signals and objections, the competitive dynamic, deal risk, and the specific next steps that will actually move this deal forward. You're direct — vague debriefs don't help reps or managers. Always respond in valid JSON only.", "role": "system"},
+          {"content": "Debrief this sales call.\n\nProspect: {{ $json.prospectContact || 'unknown contact' }} at {{ $json.prospectCompany }}{{ $json.prospectTitle ? ' (' + $json.prospectTitle + ')' : '' }}\nRep: {{ $json.repName }}\nStage: {{ $json.dealStage.replace(/_/g,' ') }}\nDate: {{ $json.callDate }}\nDeal value: {{ $json.dealValue ? $json.currency + $json.dealValue : 'unknown' }}\nProduct: {{ $json.productOffered || 'not specified' }}\nCompetitors: {{ $json.competitorsInvolved.join(', ') || 'none mentioned' }}\n\nCall notes:\n{{ $json.callNotes }}\n\nReturn this JSON:\n{\n  \"deal_summary\": \"2-3 sentences: where this deal stands and the most important thing to know about it\",\n  \"buying_signals\": [\"specific things the prospect said or did that indicate genuine interest or purchase intent\"],\n  \"objections_raised\": [\n    {\"objection\": \"what they said\", \"type\": \"price | timing | technical | authority | competition | need\", \"rebuttal_suggested\": \"how to address this\"}\n  ],\n  \"pain_points_uncovered\": [\"specific pains the prospect expressed — use their language if captured\"],\n  \"decision_process\": {\n    \"decision_maker\": \"who actually signs — or unknown\",\n    \"other_stakeholders\": [\"others involved in the decision\"],\n    \"timeline\": \"their stated or implied buying timeline\",\n    \"evaluation_criteria\": [\"what they care most about\"]\n  },\n  \"competitive_situation\": {\n    \"competitors_active\": [\"who else they're evaluating\"],\n    \"our_position\": \"where we stand relative to alternatives based on what was said\"\n  },\n  \"deal_health\": {\n    \"score\": 7,\n    \"rationale\": \"why this score (1-10)\",\n    \"biggest_risk\": \"the single thing most likely to lose this deal\"\n  },\n  \"next_steps\": [\n    {\"action\": \"specific next action\", \"owner\": \"rep | prospect | manager | se\", \"due\": \"specific timeframe\", \"critical\": true}\n  ],\n  \"coaching_note\": \"one specific coaching observation for this rep — what they did well or a skill gap surfaced in these notes\"\n}", "role": "user"}
+        ]}
+      },
+      "id": "r5u8x2a4-0005", "name": "Claude Debrief Analyst",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic", "typeVersion": 1.3, "position": [860, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.content?.[0]?.text || '';\nlet debrief;\ntry { debrief = JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) { return [{ json: { error: 'Parse error', raw } }]; }\nconst input = $('Validate Input').first().json;\ndebrief._meta = { prospectCompany: input.prospectCompany, prospectContact: input.prospectContact, repName: input.repName, repEmail: input.repEmail, dealStage: input.dealStage, dealValue: input.dealValue, currency: input.currency, callDate: input.callDate, managerEmail: input.managerEmail, replyEmail: input.replyEmail };\nreturn [{ json: debrief }];"
+      },
+      "id": "r5u8x2a4-0006", "name": "Parse Debrief",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1080, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nconst m = d._meta;\nfunction esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nconst score = d.deal_health?.score || 5;\nconst scoreColor = score >= 7 ? '#16a34a' : score >= 5 ? '#d97706' : '#dc2626';\nconst stageColors = {discovery:'#6b7280',demo:'#2563eb',technical_evaluation:'#7c3aed',proposal:'#0891b2',negotiation:'#d97706',closing:'#16a34a',renewal:'#2563eb'};\nconst sc = stageColors[m.dealStage]||'#6b7280';\nconst signalList = (d.buying_signals||[]).map(s => `<div style=\"font-size:14px;padding:5px 0;border-bottom:1px solid #f0fdf4;color:#166534\">✓ ${esc(s)}</div>`).join('');\nconst objectionCards = (d.objections_raised||[]).map(o => `<div style=\"border:1px solid #fde68a;border-radius:6px;margin-bottom:8px;overflow:hidden\"><div style=\"background:#fffbeb;padding:8px 12px;font-size:13px;font-weight:600;color:#92400e\">${esc(o.objection)} <span style=\"font-weight:400;color:#b45309\">[${esc(o.type)}]</span></div><div style=\"padding:8px 12px;font-size:13px;color:#374151\">${esc(o.rebuttal_suggested)}</div></div>`).join('');\nconst painPoints = (d.pain_points_uncovered||[]).map(p => `<div style=\"font-size:14px;padding:5px 0;border-bottom:1px solid #f0f9ff;color:#1e40af\">→ ${esc(p)}</div>`).join('');\nconst dp = d.decision_process||{};\nconst nextSteps = (d.next_steps||[]).map(ns => `<tr style=\"border-bottom:1px solid #f3f4f6${ns.critical?' background:#fffbeb':''}\"><td style=\"padding:8px 12px;font-size:13px\">${ns.critical?'⚡ ':''  }${esc(ns.action)}</td><td style=\"padding:8px 12px;font-size:12px;color:#6b7280\">${esc(ns.owner)}</td><td style=\"padding:8px 12px;font-size:12px;color:#6b7280\">${esc(ns.due)}</td></tr>`).join('');\nconst evalCriteria = (dp.evaluation_criteria||[]).map(e => `<span style=\"display:inline-block;background:#f3f4f6;color:#374151;font-size:12px;padding:3px 10px;border-radius:12px;margin:3px 3px 0 0\">${esc(e)}</span>`).join('');\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:16px;background:#f9fafb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111\">\n<div style=\"max-width:700px;margin:0 auto\">\n  <div style=\"background:#1e293b;color:#fff;padding:18px 26px;border-radius:10px 10px 0 0\">\n    <div style=\"display:flex;gap:8px;align-items:center;margin-bottom:5px\">\n      <span style=\"background:${sc};color:#fff;font-size:11px;font-weight:700;padding:2px 10px;border-radius:8px\">${esc(m.dealStage.replace(/_/g,' ').toUpperCase())}</span>\n      <span style=\"font-size:12px;color:#64748b\">${esc(m.callDate)}</span>\n      ${m.dealValue?`<span style=\"font-size:12px;color:#64748b\">· ${m.currency}${m.dealValue.toLocaleString()}</span>`:''}\n    </div>\n    <div style=\"font-size:19px;font-weight:700\">${esc(m.prospectCompany)}</div>\n    <div style=\"font-size:13px;color:#94a3b8;margin-top:3px\">${m.prospectContact?esc(m.prospectContact)+' · ':''  }Rep: ${esc(m.repName)}</div>\n  </div>\n  <div style=\"background:#fff;padding:14px 26px;border:1px solid #e5e7eb;border-top:none;display:flex;align-items:flex-start;gap:16px\">\n    <div style=\"text-align:center;flex-shrink:0\"><div style=\"font-size:32px;font-weight:800;color:${scoreColor}\">${score}</div><div style=\"font-size:11px;color:#9ca3af\">/ 10</div></div>\n    <div><p style=\"font-size:14px;line-height:1.7;color:#374151;margin:0 0 6px\">${esc(d.deal_summary)}</p><div style=\"font-size:13px;color:#dc2626\">⚠ ${esc(d.deal_health?.biggest_risk)}</div></div>\n  </div>\n  ${signalList?`<div style=\"background:#f0fdf4;padding:14px 26px;border:1px solid #bbf7d0\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#15803d;margin-bottom:7px\">Buying signals</div>${signalList}</div>`:''}\n  ${objectionCards?`<div style=\"background:#fff;padding:14px 26px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#92400e;margin-bottom:8px\">Objections raised</div>${objectionCards}</div>`:''}\n  ${painPoints?`<div style=\"background:#eff6ff;padding:14px 26px;border:1px solid #bfdbfe\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#1d4ed8;margin-bottom:7px\">Pain points</div>${painPoints}</div>`:''}\n  <div style=\"background:#fff;padding:14px 26px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:8px\">Decision process</div>\n    <div style=\"font-size:13px;margin-bottom:4px\"><strong>Decision maker:</strong> ${esc(dp.decision_maker||'unknown')}</div>\n    <div style=\"font-size:13px;margin-bottom:4px\"><strong>Timeline:</strong> ${esc(dp.timeline||'not discussed')}</div>\n    ${evalCriteria?`<div style=\"margin-top:6px\">${evalCriteria}</div>`:''}\n  </div>\n  ${nextSteps?`<div style=\"background:#fff;padding:14px 26px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\">\n    <div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:8px\">Next steps</div>\n    <table style=\"width:100%;border-collapse:collapse\">\n      <thead><tr style=\"font-size:11px;text-transform:uppercase;color:#9ca3af\"><th style=\"padding:6px 12px;text-align:left\">Action</th><th style=\"padding:6px 12px;text-align:left\">Owner</th><th style=\"padding:6px 12px;text-align:left\">Due</th></tr></thead>\n      <tbody>${nextSteps}</tbody>\n    </table>\n  </div>`:''}\n  ${d.coaching_note?`<div style=\"background:#fafafa;padding:12px 26px;border:1px solid #e5e7eb;border-top:3px solid #f3f4f6\"><div style=\"font-size:11px;font-weight:700;text-transform:uppercase;color:#9ca3af;margin-bottom:5px\">Coaching note (for manager)</div><div style=\"font-size:13px;color:#6b7280;font-style:italic\">${esc(d.coaching_note)}</div></div>`:''}\n  <div style=\"background:#1e293b;color:#475569;font-size:11px;padding:10px 26px;border-radius:0 0 10px 10px;font-family:monospace;text-align:center\">Sales Debrief · ${esc(m.prospectCompany)} · ${esc(m.callDate)}</div>\n</div></body></html>`;\nreturn [{ json: { html, replyEmail: m.replyEmail, managerEmail: m.managerEmail, repEmail: m.repEmail, prospectCompany: m.prospectCompany, dealHealth: d.deal_health?.score, debrief: d } }];"
+      },
+      "id": "r5u8x2a4-0007", "name": "Build Debrief",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1300, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const emails = [$json.repEmail, $json.managerEmail, $json.replyEmail].filter(Boolean);\nreturn [{ json: { ...$json, allRecipients: [...new Set(emails)] } }];"
+      },
+      "id": "r5u8x2a4-0008", "name": "Collect Recipients",
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1520, 240]
+    },
+    {
+      "parameters": {"conditions": {"conditions": [{"id": "ce", "leftValue": "={{ $json.allRecipients.length > 0 }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true"}}], "combinator": "and"}},
+      "id": "r5u8x2a4-0009", "name": "Has Recipients?",
+      "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [1740, 240]
+    },
+    {
+      "parameters": {"fromEmail": "={{$env.FROM_EMAIL}}", "toEmail": "={{ $json.allRecipients.join(',') }}", "subject": "Sales debrief: {{ $json.prospectCompany }} · {{ $json.debrief._meta.dealStage.replace(/_/g,' ') }} · {{ $json.dealHealth }}/10", "emailType": "html", "message": "={{$json.html}}"},
+      "id": "r5u8x2a4-0010", "name": "Email Debrief",
+      "type": "n8n-nodes-base.emailSend", "typeVersion": 2.1, "position": [1960, 180],
+      "credentials": {"smtp": {"id": "smtp-creds-01", "name": "SMTP Account"}}
+    },
+    {
+      "parameters": {"respondWith": "json", "responseBody": "={{ { status: 'debriefed', prospect: $json.prospectCompany, stage: $json.debrief._meta.dealStage, deal_health: $json.dealHealth, emailed_to: $json.allRecipients, debrief: $json.debrief } }}"},
+      "id": "r5u8x2a4-0011", "name": "Return Debrief",
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1, "position": [2180, 240]
+    }
+  ],
+  "connections": {
+    "Webhook": {"main": [[{"node": "Validate Input", "type": "main", "index": 0}]]},
+    "Validate Input": {"main": [[{"node": "Valid?", "type": "main", "index": 0}]]},
+    "Valid?": {"main": [[{"node": "Claude Debrief Analyst", "type": "main", "index": 0}], [{"node": "Return Error", "type": "main", "index": 0}]]},
+    "Claude Debrief Analyst": {"main": [[{"node": "Parse Debrief", "type": "main", "index": 0}]]},
+    "Parse Debrief": {"main": [[{"node": "Build Debrief", "type": "main", "index": 0}]]},
+    "Build Debrief": {"main": [[{"node": "Collect Recipients", "type": "main", "index": 0}]]},
+    "Collect Recipients": {"main": [[{"node": "Has Recipients?", "type": "main", "index": 0}]]},
+    "Has Recipients?": {"main": [[{"node": "Email Debrief", "type": "main", "index": 0}], [{"node": "Return Debrief", "type": "main", "index": 0}]]},
+    "Email Debrief": {"main": [[{"node": "Return Debrief", "type": "main", "index": 0}]]}
+  },
+  "pinData": {}, "settings": {"executionOrder": "v1", "saveManualExecutions": true},
+  "staticData": null, "tags": ["sales", "crm", "pipeline", "coaching"], "triggerCount": 0,
+  "updatedAt": "2025-05-21T09:00:00.000Z", "versionId": "v1.0.0"
+}
